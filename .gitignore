@@ -221,3 +221,6 @@ libs/deepagents-cli/TEXTUAL_PROGRESS.md
 
 # Workspace for generated files (images, exports, etc.)
 workspace/
+
+# Documentation directory
+docs/

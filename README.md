@@ -1,3 +1,6 @@
+<img src=".github/images/AG3NT_header.png" alt="AG3NT" width="100%"/>
+
+
 # 🚀 AG3NT
 
 **Production-grade AI agent framework for complex, long-horizon tasks.**
