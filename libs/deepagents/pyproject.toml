@@ -183,6 +183,11 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
+"examples/*" = [
+    "EXE001",  # Shebang is present but file is not executable (examples are meant to be copied)
+    "INP001",  # Implicit namespace package
+    "T201",    # Allow print statements in examples
+]
 "tests/*" = [
     "ANN001",  # Missing type annotation for function argument
     "ANN201",  # Missing return type annotation

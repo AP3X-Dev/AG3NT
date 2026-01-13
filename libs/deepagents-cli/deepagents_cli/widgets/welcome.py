@@ -18,9 +18,11 @@ def _build_colored_banner() -> str:
     # Combine each line with proper coloring
     combined_lines = []
     for ap3_part, x_part in zip(AP3X_ASCII_AP3_LINES, AP3X_ASCII_X_LINES):
-        combined_lines.append(f"[bold white]{ap3_part}[/bold white][bold #ff3333]{x_part}[/bold #ff3333]")
+        combined_lines.append(
+            f"[bold white]{ap3_part}[/bold white][bold #ff3333]{x_part}[/bold #ff3333]"
+        )
 
-    return '\n'.join(combined_lines)
+    return "\n".join(combined_lines)
 
 
 class WelcomeBanner(Static):

@@ -587,15 +587,11 @@ def create_cli_agent(
         # File operations and execute tool are provided by the sandbox backend
 
     # Add image generation middleware (uses OPENROUTER_API_KEY from env)
-    agent_middleware.append(
-        ImageGenerationMiddleware(backend=backend)
-    )
+    agent_middleware.append(ImageGenerationMiddleware(backend=backend))
 
     # Add advanced middleware for look_at (vision analysis) and finder (semantic search)
     # Pass the model for vision capabilities
-    agent_middleware.append(
-        AdvancedMiddleware(backend=backend, model=model)
-    )
+    agent_middleware.append(AdvancedMiddleware(backend=backend, model=model))
 
     # Add web middleware for web_search and read_web_page tools
     if enable_web:

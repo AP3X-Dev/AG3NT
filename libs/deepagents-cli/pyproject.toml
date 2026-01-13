@@ -75,41 +75,13 @@ docstring-code-format = true  # Formats code blocks in docstrings
 
 [tool.ruff.lint]
 select = [
-    "ALL"  # Enable all rules by default
+    "E",       # pycodestyle errors
+    "F",       # pyflakes
+    "I",       # isort
+    "W",       # pycodestyle warnings
 ]
 ignore = [
-    "COM812",  # Messes with the formatter
-    "ISC001",  # Messes with the formatter
-    "PERF203", # Rarely useful
-    "SLF001",  # Private member access
-    "PLC0415", # Imports should be at the top. Not always desirable
-    "PLR0913", # Too many arguments in function definition
-    "PLC0414", # Inconsistent with how type checkers expect to be notified of intentional re-exports
-    "C901",    # Too complex
-]
-unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
-
-[tool.ruff.lint.pyupgrade]
-keep-runtime-typing = true
-
-[tool.ruff.lint.flake8-annotations]
-allow-star-arg-any = true
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"  # Google-style docstrings
-ignore-var-parameters = true
-
-[tool.ruff.lint.per-file-ignores]
-"deepagents_cli/cli.py" = [
-    "T201",    # Allow print statements in CLI
-]
-"tests/*" = [
-    "D1",      # Skip documentation rules in tests
-    "S101",    # Allow asserts in tests
-    "S311",    # Allow pseudo-random generators in tests
-    "ANN201",  # Missing return type annotation
-    "INP001",  # Implicit namespace package
-    "PLR2004", # Magic value comparisons are fine in tests
+    "E501",    # Line too long (handled by formatter or manually)
 ]
 
 [tool.pytest.ini_options]
