@@ -1,0 +1,70 @@
+"""MCP (Model Context Protocol) integration for DeepAgents.
+
+This module provides optional MCP client connectivity, allowing DeepAgents
+to load tools from one or more MCP servers.
+
+Install with: pip install deepagents[mcp]
+
+Example:
+    ```python
+    from deepagents import create_deep_agent
+    from deepagents.mcp import MCPConfig
+
+    config = MCPConfig(
+        servers={
+            "math": {
+                "transport": "stdio",
+                "command": "python",
+                "args": ["math_server.py"],
+            },
+            "weather": {
+                "transport": "http",
+                "url": "http://localhost:8000/mcp",
+            },
+        }
+    )
+
+    agent = create_deep_agent(mcp=config)
+    ```
+"""
+
+from deepagents.mcp.config import (
+    FailBehavior,
+    MCPConfig,
+    MCPServerConfig,
+    TenantMode,
+    ServerInstanceScope,
+)
+from deepagents.mcp.naming import ToolNameRegistry, ToolNameInfo
+from deepagents.mcp.tenant import TenantResolver, RequestContext, ClientPool
+
+__all__ = [
+    "FailBehavior",
+    "MCPConfig",
+    "MCPServerConfig",
+    "TenantMode",
+    "ServerInstanceScope",
+    "ToolNameRegistry",
+    "ToolNameInfo",
+    "TenantResolver",
+    "RequestContext",
+    "ClientPool",
+]
+
+# Optional middleware (requires langchain-mcp-adapters)
+try:
+    from deepagents.middleware.mcp import (
+        MCPMiddleware,
+        ToolCallAuditInfo,
+        ToolCallResult,
+    )
+
+    __all__.extend([
+        "MCPMiddleware",
+        "ToolCallAuditInfo",
+        "ToolCallResult",
+    ])
+except ImportError:
+    # MCP adapter dependencies not installed
+    pass
+
