@@ -250,14 +250,12 @@ class ResearchOrchestrator:
         latest_state = self.session.get_latest_reasoning_state()
         open_questions = latest_state.open_questions if latest_state else []
 
-        bundle = ResearchBundle(
+        return ResearchBundle(
             executive_summary=" ".join(summary_parts),
             findings=findings,
             evidence=evidence,
             open_questions=open_questions,
         )
-
-        return bundle
 
     def _extract_findings_from_evidence(
         self,

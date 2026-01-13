@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
 from deepagents.research.config import ResearchConfig
 
@@ -145,7 +145,7 @@ class PageReader:
                     date_str = match.group(1)
                     # Try ISO format
                     if "T" in date_str:
-                        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                        return datetime.fromisoformat(date_str)
                 except Exception:
                     pass
 
@@ -255,10 +255,7 @@ class PageReader:
 
         # Check for very short content with lots of JS
         js_count = html.lower().count("<script")
-        if js_count > 10 and len(content) < 300:
-            return True
-
-        return False
+        return bool(js_count > 10 and len(content) < 300)
 
     async def read(self, url: str) -> PageContent:
         """Read and extract content from a URL.
@@ -363,7 +360,7 @@ class MockResponse:
         </html>
         """
 
-    async def __aenter__(self) -> MockResponse:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *args: object) -> None:

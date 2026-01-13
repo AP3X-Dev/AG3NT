@@ -44,24 +44,24 @@ from deepagents.compaction.retrieval import RetrievalIndex, RetrievalResult
 from deepagents.compaction.summarizer import ReasoningStateSummarizer
 
 __all__ = [
-    # Config
-    "CompactionConfig",
     # Models
     "ArtifactMeta",
+    # Core components
+    "ArtifactStore",
+    "AssembledContext",
+    # Config
+    "CompactionConfig",
+    "CompactionMiddleware",
+    "ContextAssembler",
+    "ContextBlock",
     "EvidenceRecord",
     "Finding",
     "MaskedObservationPlaceholder",
-    "ReasoningState",
-    "ResearchBundle",
-    # Core components
-    "ArtifactStore",
     "ObservationMasker",
+    "ReasoningState",
     "ReasoningStateSummarizer",
+    "ResearchBundle",
+    "ResearchSubagentRunner",
     "RetrievalIndex",
     "RetrievalResult",
-    "ContextAssembler",
-    "ContextBlock",
-    "AssembledContext",
-    "ResearchSubagentRunner",
-    "CompactionMiddleware",
 ]

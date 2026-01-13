@@ -141,7 +141,7 @@ class ReasoningStateSummarizer:
     ) -> str:
         """Generate a high-level executive summary."""
         # Count message types
-        human_count = sum(1 for m in messages if isinstance(m, HumanMessage))
+        sum(1 for m in messages if isinstance(m, HumanMessage))
         ai_count = sum(1 for m in messages if isinstance(m, AIMessage))
         tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
 

@@ -215,7 +215,7 @@ class SkillRegistry:
 
         for meta in self._skills.values():
             # Filter by mode
-            if mode and meta.mode != mode and meta.mode != SkillMode.BOTH:
+            if mode and meta.mode not in (mode, SkillMode.BOTH):
                 continue
 
             # Filter by tags

@@ -15,45 +15,36 @@ class MockMiddleware:
     """Mock middleware for testing."""
 
 
-
 class MemoryMiddleware(MockMiddleware):
     """Mock MemoryMiddleware."""
-
 
 
 class SkillsMiddleware(MockMiddleware):
     """Mock SkillsMiddleware."""
 
 
-
 class FilesystemMiddleware(MockMiddleware):
     """Mock FilesystemMiddleware."""
-
 
 
 class SubAgentMiddleware(MockMiddleware):
     """Mock SubAgentMiddleware."""
 
 
-
 class CompactionMiddleware(MockMiddleware):
     """Mock CompactionMiddleware."""
-
 
 
 class SummarizationMiddleware(MockMiddleware):
     """Mock SummarizationMiddleware."""
 
 
-
 class HumanInTheLoopMiddleware(MockMiddleware):
     """Mock HumanInTheLoopMiddleware."""
 
 
-
 class UnknownMiddleware(MockMiddleware):
     """Unknown middleware not in registry."""
-
 
 
 class TestMiddlewarePhase:

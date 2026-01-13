@@ -70,7 +70,7 @@ class PromptCachingMiddleware:
 class _NoOpCachingMiddleware(PromptCachingMiddleware):
     """No-op middleware when no prompt caching implementation is available."""
 
-    def __new__(cls) -> _NoOpCachingMiddleware:  # noqa: PYI034
+    def __new__(cls) -> _NoOpCachingMiddleware:
         """Create a no-op middleware instance."""
         return object.__new__(cls)
 

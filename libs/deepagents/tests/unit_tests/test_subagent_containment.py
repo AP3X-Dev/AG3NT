@@ -1,6 +1,5 @@
 """Tests for Subagent Containment module."""
 
-
 from deepagents.subagent import (
     ContainedSubAgentMiddleware,
     DistilledReturnContract,

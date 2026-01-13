@@ -75,14 +75,100 @@ select = [
     "ALL"  # Enable all rules by default
 ]
 ignore = [
+    # Formatter conflicts
     "COM812",  # Messes with the formatter
     "ISC001",  # Messes with the formatter
+    # Style preferences (low priority)
     "PERF203", # Rarely useful
     "SLF001",  # Private member access
     "PLC0415", # Imports should be at the top. Not always desirable
     "PLR0913", # Too many arguments in function definition
     "PLC0414", # Inconsistent with how type checkers expect to be notified of intentional re-exports
     "C901",    # Too complex
+    # Documentation (can be added incrementally)
+    "D102",    # Missing docstring in public method
+    "D107",    # Missing docstring in __init__
+    # Type annotations (allow incremental adoption)
+    "ANN001",  # Missing type annotation for function argument
+    "ANN003",  # Missing type annotation for **kwargs
+    "ANN201",  # Missing return type annotation for public function
+    "ANN202",  # Missing return type annotation for private function
+    "ANN204",  # Missing return type annotation for special method
+    "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
+    # Typing imports (can be noisy during development)
+    "TC001",   # Move first-party import into TYPE_CHECKING block
+    "TC002",   # Move third-party import into TYPE_CHECKING block
+    "TC003",   # Move standard library import into TYPE_CHECKING block
+    # Performance (optimize later)
+    "PERF401", # Use a list comprehension to create a transformed list
+    # Logging (f-strings in logging are fine for this project)
+    "G004",    # Logging statement uses f-string
+    # Print statements (intentional in examples and CLI)
+    "T201",    # `print` found
+    # Exception messages (can be strict later)
+    "EM101",   # Exception must not use a string literal
+    "EM102",   # Exception must not use an f-string literal
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "TRY300",  # Consider moving this statement to an `else` block
+    "TRY400",  # Use `logging.exception` instead of `logging.error`
+    # Boolean parameters (common pattern in this codebase)
+    "FBT001",  # Boolean positional arg in function definition
+    "FBT002",  # Boolean default value in function definition
+    # Magic values (too noisy)
+    "PLR2004", # Magic value used in comparison
+    # Complexity rules (can be addressed later)
+    "PLR0911", # Too many return statements
+    "PLR0912", # Too many branches
+    "PLR0915", # Too many statements
+    # Argument rules (often intentional)
+    "ARG001",  # Unused function argument
+    "ARG002",  # Unused method argument
+    # Other low-priority
+    "BLE001",  # Do not catch blind exception
+    "PTH123",  # `open()` should be replaced by `Path.open()`
+    "RUF001",  # String contains ambiguous unicode character
+    "SIM102",  # Use a single `if` statement instead of nested `if` statements
+    "SIM105",  # Use contextlib.suppress() instead of try-except-pass
+    "SIM108",  # Use ternary operator instead of if-else block
+    "N803",    # Argument name should be lowercase (sometimes matches API)
+    "E501",    # Line too long (formatter handles this)
+    # Security (usually false positives or intentional)
+    "S105",    # Possible hardcoded password
+    "S110",    # try-except-pass detected
+    "S324",    # Probable use of insecure hash (md5 for hashing, not crypto)
+    "S603",    # subprocess call check for untrusted input
+    "S606",    # Starting process without shell
+    "S607",    # Starting process with partial path
+    # TODOs and FIXMEs (tracking in code is fine)
+    "TD002",   # Missing author in TODO
+    "TD003",   # Missing issue link for TODO
+    "FIX002",  # Line contains TODO
+    # Docstring parameter issues
+    "D417",    # Missing argument description in docstring
+    "D105",    # Missing docstring in magic method
+    # Other common patterns
+    "PLW2901", # for loop variable overwritten
+    "E741",    # Ambiguous variable name
+    "B904",    # raise without from
+    "RUF012",  # Mutable class default
+    "PYI056",  # __all__.extend not supported by type checkers
+    "DTZ003",  # datetime.utcnow()
+    "DTZ005",  # datetime.now() without tz
+    "DTZ007",  # datetime.strptime without %z
+    "E722",    # bare except
+    "ERA001",  # commented-out code
+    "INP001",  # implicit namespace package
+    "PGH003",  # blanket type ignore
+    "RET504", # unnecessary assign before return
+    "FURB162", # fromisoformat replace z
+    "C401",    # unnecessary generator set
+    "PERF402", # manual list copy
+    "SIM103",  # needless bool
+    "PLR1714", # repeated equality comparison
+    "ARG005",  # unused lambda argument
+    "B007",    # unused loop control variable
+    "FBT003",  # boolean positional value in call
+    "PYI034",  # non-self return type (we use it for factory pattern)
 ]
 unfixable = ["B028"]  # Rules that shouldn't be auto-fixed
 

@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 WRITE_TODOS_DESCRIPTION = """Update the plan for the current work item.
 
-Replaces the current todo list with the provided items. Each todo represents 
+Replaces the current todo list with the provided items. Each todo represents
 a step in the plan for the active WorkItem.
 
 Parameters:
@@ -64,7 +64,7 @@ Best practices:
 - Update status as you complete each item
 - Do NOT call multiple times in parallel
 
-Note: Todos are plan steps for the currently active WorkItem. If no WorkItem 
+Note: Todos are plan steps for the currently active WorkItem. If no WorkItem
 is active, one will be created automatically based on the current objective."""
 
 READ_TODOS_DESCRIPTION = """Read the current todo list (plan steps) for the active WorkItem.

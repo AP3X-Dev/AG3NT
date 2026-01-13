@@ -204,7 +204,6 @@ async def stream_agent_response(agent, conversation_history: list):
     """Stream agent response with visible tool calls and thinking."""
     accumulated_text = ""
     tool_call_buffers = {}  # Track partial tool calls
-    active_tool_calls = {}  # Track tools being executed
 
     print("[Agent] ", end="", flush=True)
 

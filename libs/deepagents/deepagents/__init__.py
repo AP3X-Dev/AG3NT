@@ -45,12 +45,25 @@ from deepagents.subagent import (
 __all__ = [
     # Core
     "AG3NTConfig",
+    # Approval Policy
+    "ApprovalLedger",
+    "ApprovalPolicy",
+    "ApprovalRecord",
     "CompiledSubAgent",
+    # Subagent Containment
+    "ContainedSubAgentMiddleware",
+    # Context Engineering
+    "ContextEngineeringConfig",
+    "ContextEngineeringMiddleware",
+    "DistilledReturnContract",
     "FilesystemMiddleware",
     "MemoryMiddleware",
     "PromptCachingMiddleware",
     "SubAgent",
     "SubAgentMiddleware",
+    "SubagentConfig",
+    "TokenBudgetTracker",
+    "ToolRiskLevel",
     "WorkspaceLayout",
     "build_ag3nt_middleware_stack",
     "create_deep_agent",
@@ -58,26 +71,13 @@ __all__ = [
     "get_default_workspace_layout",
     "get_openrouter_model",
     "is_openrouter_configured",
-    # Context Engineering
-    "ContextEngineeringConfig",
-    "ContextEngineeringMiddleware",
-    "TokenBudgetTracker",
-    # Approval Policy
-    "ApprovalLedger",
-    "ApprovalPolicy",
-    "ApprovalRecord",
-    "ToolRiskLevel",
-    # Subagent Containment
-    "ContainedSubAgentMiddleware",
-    "DistilledReturnContract",
-    "SubagentConfig",
 ]
 
 # Optional MCP exports (requires deepagents[mcp])
 try:
     from deepagents.mcp import FailBehavior, MCPConfig, MCPServerConfig
 
-    __all__.extend(["FailBehavior", "MCPConfig", "MCPServerConfig"])
+    __all__ += ["FailBehavior", "MCPConfig", "MCPServerConfig"]
 except ImportError:
     # MCP dependencies not installed
     pass

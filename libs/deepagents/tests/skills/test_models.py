@@ -1,6 +1,5 @@
 """Tests for skills models."""
 
-
 import pytest
 
 from deepagents.skills.models import (

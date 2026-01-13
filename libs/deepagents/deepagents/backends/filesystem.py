@@ -358,7 +358,7 @@ class FilesystemBackend(BackendProtocol):
         cmd.extend(["--", pattern, str(base_full)])
 
         try:
-            proc = subprocess.run(  # noqa: S603
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,

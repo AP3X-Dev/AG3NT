@@ -340,7 +340,7 @@ class Distiller:
         claim = group[0][0]
 
         # Collect all artifact IDs
-        artifact_ids = list(set(aid for _, aid in group))
+        artifact_ids = list({aid for _, aid in group})
 
         # Determine confidence based on corroboration
         if len(artifact_ids) >= 3:

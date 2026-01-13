@@ -59,13 +59,11 @@ try:
         ToolCallResult,
     )
 
-    __all__.extend(
-        [
-            "MCPMiddleware",
-            "ToolCallAuditInfo",
-            "ToolCallResult",
-        ]
-    )
+    __all__ += [
+        "MCPMiddleware",
+        "ToolCallAuditInfo",
+        "ToolCallResult",
+    ]
 except ImportError:
     # MCP adapter dependencies not installed
     pass

@@ -351,7 +351,7 @@ async def _edit_image(
 
     # Add reference images if provided
     if additional_images:
-        for i, img_bytes in enumerate(additional_images[:4]):  # Max 5 total images
+        for _i, img_bytes in enumerate(additional_images[:4]):  # Max 5 total images
             b64_ref = base64.b64encode(img_bytes).decode("utf-8")
             content.append(
                 {

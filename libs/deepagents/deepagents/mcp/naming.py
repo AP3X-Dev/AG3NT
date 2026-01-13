@@ -48,9 +48,7 @@ def normalize_tool_name(name: str) -> str:
     normalized = re.sub(r"_+", "_", normalized)
 
     # Remove leading/trailing underscores
-    normalized = normalized.strip("_")
-
-    return normalized
+    return normalized.strip("_")
 
 
 def create_prefixed_name(server_name: str, tool_name: str, separator: str = "_") -> str:

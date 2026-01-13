@@ -73,21 +73,21 @@ from deepagents.skills.registry import SkillRegistry
 from deepagents.skills.spawner import SkillSpawner
 
 __all__ = [
-    # Config
-    "SkillsConfig",
     # Models
     "Skill",
+    "SkillApplier",
+    "SkillBuilder",
+    "SkillLoader",
     "SkillMeta",
     "SkillMode",
-    "SkillSpec",
-    "SkillValidationError",
     # Core components
     "SkillRegistry",
-    "SkillLoader",
-    "SkillApplier",
     "SkillSpawner",
+    "SkillSpec",
     "SkillUsageLedger",
-    "SkillBuilder",
+    "SkillValidationError",
+    # Config
+    "SkillsConfig",
     # Middleware
     "SkillsToolkitMiddleware",
 ]

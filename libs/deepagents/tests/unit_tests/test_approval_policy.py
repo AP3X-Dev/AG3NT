@@ -1,7 +1,5 @@
 """Tests for Approval Policy module."""
 
-
-
 from deepagents.approval import (
     DEFAULT_TOOL_CLASSIFICATIONS,
     ApprovalLedger,

@@ -50,7 +50,7 @@ __all__ = [
 try:
     from deepagents.middleware.mcp import MCPMiddleware
 
-    __all__.append("MCPMiddleware")
+    __all__ += ["MCPMiddleware"]
 except ImportError:
     # MCP dependencies not installed
     pass
