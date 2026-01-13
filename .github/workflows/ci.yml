@@ -39,7 +39,9 @@ jobs:
             python-version: "3.11"
           # benchmarking
           - working-directory: "libs/harbor"
-            python-version: "3.13"
+	            # Harbor depends on packages (e.g. modal/harbor) that may lag Python pre-release support.
+	            # Keep CI green by running Harbor on the latest stable minor we support.
+	            python-version: "3.12"
       fail-fast: false
     uses: ./.github/workflows/_lint.yml
     with:
@@ -65,7 +67,7 @@ jobs:
             python-version: "3.13"
           # benchmarking
           - working-directory: "libs/harbor"
-            python-version: "3.13"
+	            python-version: "3.12"
       fail-fast: false
     uses: ./.github/workflows/_test.yml
     with:
