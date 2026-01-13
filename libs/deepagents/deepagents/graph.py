@@ -58,7 +58,7 @@ def get_default_model() -> BaseChatModel:
     )
 
 
-def _create_mcp_middleware(mcp_config: "MCPConfig | dict[str, Any]") -> "AgentMiddleware":
+def _create_mcp_middleware(mcp_config: MCPConfig | dict[str, Any]) -> AgentMiddleware:
     """Create MCPMiddleware from config.
 
     Args:
@@ -74,10 +74,7 @@ def _create_mcp_middleware(mcp_config: "MCPConfig | dict[str, Any]") -> "AgentMi
         from deepagents.mcp import MCPConfig
         from deepagents.middleware.mcp import MCPMiddleware
     except ImportError as e:
-        msg = (
-            "MCP dependencies not installed. "
-            "Install with: pip install deepagents[mcp]"
-        )
+        msg = "MCP dependencies not installed. Install with: pip install deepagents[mcp]"
         raise ImportError(msg) from e
 
     # Parse dict config if needed
@@ -96,7 +93,7 @@ def create_deep_agent(
     subagents: list[SubAgent | CompiledSubAgent] | None = None,
     skills: list[str] | None = None,
     memory: list[str] | None = None,
-    mcp: "MCPConfig | dict[str, Any] | None" = None,
+    mcp: MCPConfig | dict[str, Any] | None = None,
     response_format: ResponseFormat | None = None,
     context_schema: type[Any] | None = None,
     checkpointer: Checkpointer | None = None,
@@ -148,7 +145,7 @@ def create_deep_agent(
 
             Example::
 
-                mcp=MCPConfig(
+                mcp = MCPConfig(
                     servers={
                         "math": MCPServerConfig(
                             transport="stdio",

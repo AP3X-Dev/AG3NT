@@ -24,11 +24,11 @@ from deepagents.middleware.utilities import UtilitiesMiddleware
 from deepagents.middleware.web import WebMiddleware
 
 __all__ = [
+    "MIDDLEWARE_CONTRACTS",
     "AdvancedMiddleware",
     "CompiledSubAgent",
     "FilesystemMiddleware",
     "ImageGenerationMiddleware",
-    "MIDDLEWARE_CONTRACTS",
     "MemoryMiddleware",
     "MiddlewareContract",
     "MiddlewarePhase",

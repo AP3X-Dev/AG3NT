@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from enum import IntEnum, auto
-from typing import TYPE_CHECKING, Any
+from enum import IntEnum
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from langchain.agents.middleware.types import AgentMiddleware
@@ -25,27 +25,27 @@ logger = logging.getLogger(__name__)
 
 class MiddlewarePhase(IntEnum):
     """Canonical ordering phases for middleware.
-    
+
     Middleware should be ordered by phase. Within a phase, order is flexible.
     Lower phase numbers run first (closer to user input).
     Higher phase numbers run last (closer to LLM).
     """
-    
+
     # Phase 1: Context Loading (memory, skills metadata)
     CONTEXT_LOADING = 10
-    
+
     # Phase 2: Tool Registration (filesystem, shell, web, utilities)
     TOOL_REGISTRATION = 20
-    
+
     # Phase 3: Orchestration (subagents, task delegation)
     ORCHESTRATION = 30
-    
+
     # Phase 4: Context Management (compaction, summarization)
     CONTEXT_MANAGEMENT = 40
-    
+
     # Phase 5: Model Optimization (caching, patching)
     MODEL_OPTIMIZATION = 50
-    
+
     # Phase 6: Approval Gating (HITL, must be last before LLM)
     APPROVAL_GATING = 60
 
@@ -53,13 +53,13 @@ class MiddlewarePhase(IntEnum):
 @dataclass
 class PromptBudget:
     """Token budget allocation for a middleware's prompt injection."""
-    
+
     max_tokens: int = 500
     """Maximum tokens this middleware can inject into system prompt."""
-    
+
     priority: int = 50
     """Priority for budget allocation (higher = more important, 0-100)."""
-    
+
     can_be_trimmed: bool = True
     """Whether this content can be trimmed if over budget."""
 
@@ -67,44 +67,44 @@ class PromptBudget:
 @dataclass
 class MiddlewareContract:
     """Contract defining what a middleware does and its constraints.
-    
+
     This makes middleware responsibilities explicit and enables
     validation of the middleware stack.
     """
-    
+
     name: str
     """Unique identifier for this middleware type."""
-    
+
     phase: MiddlewarePhase
     """Which phase this middleware belongs to."""
-    
+
     # What this middleware does
     injects_prompt: bool = False
     """Whether this middleware injects content into system prompt."""
-    
+
     registers_tools: bool = False
     """Whether this middleware registers tools."""
-    
+
     tool_names: list[str] = field(default_factory=list)
     """Names of tools this middleware registers."""
-    
+
     modifies_tool_output: bool = False
     """Whether this middleware modifies tool outputs."""
-    
+
     can_interrupt: bool = False
     """Whether this middleware can interrupt execution."""
-    
+
     # Budget constraints
     prompt_budget: PromptBudget | None = None
     """Token budget for prompt injection."""
-    
+
     # Dependencies
     requires: list[str] = field(default_factory=list)
     """Middleware names that must come before this one."""
-    
+
     conflicts_with: list[str] = field(default_factory=list)
     """Middleware names that cannot be used with this one."""
-    
+
     # Metadata
     description: str = ""
     """Human-readable description of what this middleware does."""
@@ -264,13 +264,13 @@ class ValidationResult:
     """Total number of tools registered."""
 
 
-def get_middleware_name(middleware: "AgentMiddleware") -> str:
+def get_middleware_name(middleware: AgentMiddleware) -> str:
     """Get the contract name for a middleware instance."""
     return type(middleware).__name__
 
 
 def validate_middleware_stack(
-    middleware_list: list["AgentMiddleware"],
+    middleware_list: list[AgentMiddleware],
     max_prompt_budget: int = 6000,
 ) -> ValidationResult:
     """Validate a middleware stack for ordering and conflicts.
@@ -298,34 +298,25 @@ def validate_middleware_stack(
 
         # Check phase ordering
         if contract.phase < last_phase:
-            result.errors.append(
-                f"Middleware '{name}' (phase {contract.phase.name}) "
-                f"is out of order - should come before phase {last_phase.name}"
-            )
+            result.errors.append(f"Middleware '{name}' (phase {contract.phase.name}) is out of order - should come before phase {last_phase.name}")
             result.valid = False
         last_phase = max(last_phase, contract.phase)
 
         # Check dependencies
         for req in contract.requires:
             if req not in seen_names:
-                result.errors.append(
-                    f"Middleware '{name}' requires '{req}' but it was not found before"
-                )
+                result.errors.append(f"Middleware '{name}' requires '{req}' but it was not found before")
                 result.valid = False
 
         # Check conflicts
         for conflict in contract.conflicts_with:
             if conflict in seen_names:
-                result.warnings.append(
-                    f"Middleware '{name}' conflicts with '{conflict}' - review usage"
-                )
+                result.warnings.append(f"Middleware '{name}' conflicts with '{conflict}' - review usage")
 
         # Check tool conflicts
         for tool in contract.tool_names:
             if tool in seen_tools:
-                result.errors.append(
-                    f"Tool '{tool}' registered by '{name}' conflicts with earlier middleware"
-                )
+                result.errors.append(f"Tool '{tool}' registered by '{name}' conflicts with earlier middleware")
                 result.valid = False
             seen_tools.add(tool)
 
@@ -339,9 +330,6 @@ def validate_middleware_stack(
 
     # Check total budget
     if result.total_prompt_budget > max_prompt_budget:
-        result.warnings.append(
-            f"Total prompt budget ({result.total_prompt_budget}) exceeds max ({max_prompt_budget})"
-        )
+        result.warnings.append(f"Total prompt budget ({result.total_prompt_budget}) exceeds max ({max_prompt_budget})")
 
     return result
-

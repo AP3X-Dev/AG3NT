@@ -13,19 +13,6 @@ from deepagents.agent_factory import (
     build_ag3nt_middleware_stack,
     get_default_workspace_layout,
 )
-from deepagents.graph import create_deep_agent
-from deepagents.middleware.filesystem import FilesystemMiddleware
-from deepagents.middleware.memory import MemoryMiddleware
-from deepagents.middleware.prompt_caching import PromptCachingMiddleware
-from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
-from deepagents.openrouter import get_default_openrouter_model, get_openrouter_model, is_openrouter_configured
-
-# Context Engineering exports
-from deepagents.context_engineering import (
-    ContextEngineeringConfig,
-    ContextEngineeringMiddleware,
-    TokenBudgetTracker,
-)
 
 # Approval Policy exports
 from deepagents.approval import (
@@ -34,6 +21,19 @@ from deepagents.approval import (
     ApprovalRecord,
     ToolRiskLevel,
 )
+
+# Context Engineering exports
+from deepagents.context_engineering import (
+    ContextEngineeringConfig,
+    ContextEngineeringMiddleware,
+    TokenBudgetTracker,
+)
+from deepagents.graph import create_deep_agent
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.prompt_caching import PromptCachingMiddleware
+from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
+from deepagents.openrouter import get_default_openrouter_model, get_openrouter_model, is_openrouter_configured
 
 # Subagent Containment exports
 from deepagents.subagent import (
@@ -75,9 +75,9 @@ __all__ = [
 
 # Optional MCP exports (requires deepagents[mcp])
 try:
-    from deepagents.mcp import MCPConfig, MCPServerConfig, FailBehavior
+    from deepagents.mcp import FailBehavior, MCPConfig, MCPServerConfig
 
-    __all__.extend(["MCPConfig", "MCPServerConfig", "FailBehavior"])
+    __all__.extend(["FailBehavior", "MCPConfig", "MCPServerConfig"])
 except ImportError:
     # MCP dependencies not installed
     pass
