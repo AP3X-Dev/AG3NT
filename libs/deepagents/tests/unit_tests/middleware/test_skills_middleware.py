@@ -266,19 +266,18 @@ Content
 
 def test_list_skills_from_backend_single_skill(tmp_path: Path) -> None:
     """Test listing a single skill from filesystem backend."""
-    # Create backend with actual filesystem (no virtual mode)
-    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=False)
+    # Create backend with virtual mode (skills middleware uses POSIX paths)
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
 
     # Create skill using backend's upload_files interface
-    skills_dir = tmp_path / "skills"
-    skill_path = str(skills_dir / "my-skill" / "SKILL.md")
+    skill_path = "/skills/my-skill/SKILL.md"
     skill_content = make_skill_content("my-skill", "My test skill")
 
     responses = backend.upload_files([(skill_path, skill_content.encode("utf-8"))])
     assert responses[0].error is None
 
-    # List skills using the full absolute path
-    skills = _list_skills(backend, str(skills_dir))
+    # List skills using the virtual path
+    skills = _list_skills(backend, "/skills")
 
     assert skills == [
         {

@@ -315,9 +315,12 @@ def _list_skills(backend: BackendProtocol, source_path: str) -> list[SkillMetada
     # For each skill directory, check if SKILL.md exists and download it
     skill_md_paths = []
     for skill_dir_path in skill_dirs:
-        # Construct SKILL.md path using PurePosixPath for safe, standardized path operations
-        skill_dir = PurePosixPath(skill_dir_path)
-        skill_md_path = str(skill_dir / "SKILL.md")
+        # Construct SKILL.md path - detect path style from the directory path
+        # If the path contains backslashes, use backslash as separator; otherwise use forward slash
+        skill_dir_clean = skill_dir_path.rstrip("/\\")
+        # Determine separator based on path content (Windows paths have backslashes)
+        sep = "\\" if "\\" in skill_dir_clean else "/"
+        skill_md_path = skill_dir_clean + sep + "SKILL.md"
         skill_md_paths.append((skill_dir_path, skill_md_path))
 
     paths_to_download = [skill_md_path for _, skill_md_path in skill_md_paths]
@@ -390,9 +393,11 @@ async def _alist_skills(backend: BackendProtocol, source_path: str) -> list[Skil
     # For each skill directory, check if SKILL.md exists and download it
     skill_md_paths = []
     for skill_dir_path in skill_dirs:
-        # Construct SKILL.md path using PurePosixPath for safe, standardized path operations
-        skill_dir = PurePosixPath(skill_dir_path)
-        skill_md_path = str(skill_dir / "SKILL.md")
+        # Construct SKILL.md path - detect path style from the directory path
+        # If the path contains backslashes, use backslash as separator; otherwise use forward slash
+        skill_dir_clean = skill_dir_path.rstrip("/\\")
+        sep = "\\" if "\\" in skill_dir_clean else "/"
+        skill_md_path = skill_dir_clean + sep + "SKILL.md"
         skill_md_paths.append((skill_dir_path, skill_md_path))
 
     paths_to_download = [skill_md_path for _, skill_md_path in skill_md_paths]

@@ -11,7 +11,8 @@ class TestUtilitiesMiddleware:
         """Test default initialization."""
         middleware = UtilitiesMiddleware()
         assert middleware is not None
-        assert len(middleware.tools) == 4  # undo_edit, format_file, get_diagnostics, mermaid
+        # undo_edit, format_file, get_diagnostics, mermaid, open_file
+        assert len(middleware.tools) == 5
 
     def test_init_with_enabled_tools(self):
         """Test initialization with specific tools enabled."""
@@ -22,7 +23,7 @@ class TestUtilitiesMiddleware:
         """Test that all expected tools are present."""
         middleware = UtilitiesMiddleware()
         tool_names = {tool.name for tool in middleware.tools}
-        assert tool_names == {"undo_edit", "format_file", "get_diagnostics", "mermaid"}
+        assert tool_names == {"undo_edit", "format_file", "get_diagnostics", "mermaid", "open_file"}
 
 
 class TestWebMiddleware:

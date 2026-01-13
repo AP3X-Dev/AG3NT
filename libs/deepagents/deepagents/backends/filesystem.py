@@ -163,14 +163,19 @@ class FilesystemBackend(BackendProtocol):
                             results.append({"path": abs_path + "/", "is_dir": True})
                 else:
                     # Virtual mode: strip cwd prefix
-                    if abs_path.startswith(cwd_str):
-                        relative_path = abs_path[len(cwd_str) :]
-                    elif abs_path.startswith(str(self.cwd)):
+                    # Normalize path separators for cross-platform compatibility
+                    abs_path_norm = abs_path.replace("\\", "/")
+                    cwd_str_norm = cwd_str.replace("\\", "/")
+                    cwd_base_norm = str(self.cwd).replace("\\", "/")
+
+                    if abs_path_norm.startswith(cwd_str_norm):
+                        relative_path = abs_path_norm[len(cwd_str_norm) :]
+                    elif abs_path_norm.startswith(cwd_base_norm):
                         # Handle case where cwd doesn't end with /
-                        relative_path = abs_path[len(str(self.cwd)) :].lstrip("/")
+                        relative_path = abs_path_norm[len(cwd_base_norm) :].lstrip("/")
                     else:
                         # Path is outside cwd, return as-is or skip
-                        relative_path = abs_path
+                        relative_path = abs_path_norm
 
                     virt_path = "/" + relative_path
 
@@ -383,7 +388,8 @@ class FilesystemBackend(BackendProtocol):
             p = Path(ftext)
             if self.virtual_mode:
                 try:
-                    virt = "/" + str(p.resolve().relative_to(self.cwd))
+                    # Use as_posix() for cross-platform path consistency
+                    virt = "/" + p.resolve().relative_to(self.cwd).as_posix()
                 except Exception:
                     continue
             else:
@@ -423,7 +429,8 @@ class FilesystemBackend(BackendProtocol):
                 if regex.search(line):
                     if self.virtual_mode:
                         try:
-                            virt_path = "/" + str(fp.resolve().relative_to(self.cwd))
+                            # Use as_posix() for cross-platform path consistency
+                            virt_path = "/" + fp.resolve().relative_to(self.cwd).as_posix()
                         except Exception:
                             continue
                     else:
@@ -465,16 +472,12 @@ class FilesystemBackend(BackendProtocol):
                     except OSError:
                         results.append({"path": abs_path, "is_dir": False})
                 else:
-                    cwd_str = str(self.cwd)
-                    if not cwd_str.endswith("/"):
-                        cwd_str += "/"
-                    if abs_path.startswith(cwd_str):
-                        relative_path = abs_path[len(cwd_str) :]
-                    elif abs_path.startswith(str(self.cwd)):
-                        relative_path = abs_path[len(str(self.cwd)) :].lstrip("/")
-                    else:
-                        relative_path = abs_path
-                    virt = "/" + relative_path
+                    # Use as_posix() for cross-platform path consistency
+                    try:
+                        virt = "/" + matched_path.resolve().relative_to(self.cwd).as_posix()
+                    except ValueError:
+                        # Path is outside cwd, skip
+                        continue
                     try:
                         st = matched_path.stat()
                         results.append(
@@ -546,6 +549,10 @@ class FilesystemBackend(BackendProtocol):
         for path in paths:
             try:
                 resolved_path = self._resolve_path(path)
+                # Check for directory first (Windows doesn't raise IsADirectoryError)
+                if resolved_path.is_dir():
+                    responses.append(FileDownloadResponse(path=path, content=None, error="is_directory"))
+                    continue
                 # Use flags to optionally prevent symlink following if
                 # supported by the OS
                 fd = os.open(resolved_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
