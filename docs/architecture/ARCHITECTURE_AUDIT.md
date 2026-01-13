@@ -58,7 +58,7 @@ Agent returns final response to UI Layer → User
 | 2 | FilesystemMiddleware | ✅ Filesystem guidance | ls, read_file, write_file, edit_file, glob, grep, execute | - |
 | 3 | SubAgentMiddleware | ✅ Task guidance | task | - |
 | 4 | SummarizationMiddleware | - | - | ✅ Auto-summarizes on threshold |
-| 5 | AnthropicPromptCachingMiddleware | - | - | - |
+| 5 | PromptCachingMiddleware | - | - | - |
 | 6 | PatchToolCallsMiddleware | - | - | ✅ Patches tool call formats |
 | 7 | MCPMiddleware (optional) | ✅ MCP tool docs | MCP server tools | - |
 | 8 | HumanInTheLoopMiddleware | - | - | ✅ Interrupts for approval |

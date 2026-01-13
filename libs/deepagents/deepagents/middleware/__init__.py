@@ -16,6 +16,8 @@ from deepagents.middleware.contracts import (
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.image_generation import ImageGenerationMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+from deepagents.middleware.prompt_caching import PromptCachingMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
 from deepagents.middleware.utilities import UtilitiesMiddleware
@@ -30,7 +32,9 @@ __all__ = [
     "MemoryMiddleware",
     "MiddlewareContract",
     "MiddlewarePhase",
+    "PatchToolCallsMiddleware",
     "PromptBudget",
+    "PromptCachingMiddleware",
     "SkillsMiddleware",
     "SubAgent",
     "SubAgentMiddleware",

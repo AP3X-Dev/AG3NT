@@ -216,10 +216,10 @@ MIDDLEWARE_CONTRACTS: dict[str, MiddlewareContract] = {
         modifies_tool_output=True,
         description="Auto-summarizes conversation when over threshold (legacy)",
     ),
-    "AnthropicPromptCachingMiddleware": MiddlewareContract(
-        name="AnthropicPromptCachingMiddleware",
+    "PromptCachingMiddleware": MiddlewareContract(
+        name="PromptCachingMiddleware",
         phase=MiddlewarePhase.MODEL_OPTIMIZATION,
-        description="Adds cache control for Anthropic models",
+        description="Caches system prompts to reduce costs and latency",
     ),
     "PatchToolCallsMiddleware": MiddlewareContract(
         name="PatchToolCallsMiddleware",

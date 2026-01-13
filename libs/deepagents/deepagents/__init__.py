@@ -16,6 +16,7 @@ from deepagents.agent_factory import (
 from deepagents.graph import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.prompt_caching import PromptCachingMiddleware
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
 from deepagents.openrouter import get_default_openrouter_model, get_openrouter_model, is_openrouter_configured
 
@@ -47,6 +48,7 @@ __all__ = [
     "CompiledSubAgent",
     "FilesystemMiddleware",
     "MemoryMiddleware",
+    "PromptCachingMiddleware",
     "SubAgent",
     "SubAgentMiddleware",
     "WorkspaceLayout",

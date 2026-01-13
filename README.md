@@ -121,34 +121,27 @@ agent = create_deep_agent(model=model)
 - Cost tracking and optimization
 - No need to manage multiple API keys
 
-### 2. Extended Middleware System
+### 2. Unified Middleware System
 
-AG3NT's power comes from its middleware architecture. Each middleware adds specialized capabilities:
+AG3NT's power comes from its composable middleware architecture. All middleware is included by default and works together seamlessly:
 
 ```python
 from deepagents import create_deep_agent
-from deepagents.middleware import (
-    UtilitiesMiddleware,    # Dev tools
-    WebMiddleware,          # Web access
-    AdvancedMiddleware,     # AI-powered analysis
-    MemoryMiddleware,       # Persistent learning
-    SkillsMiddleware,       # Domain expertise
+
+# All core middleware is automatically included!
+# Just create an agent and go:
+agent = create_deep_agent(
+    system_prompt="You are an expert software engineer."
 )
 
+# Customize memory and skills sources if needed:
 agent = create_deep_agent(
-    middleware=[
-        UtilitiesMiddleware(),  # undo_edit, format_file, get_diagnostics, mermaid
-        WebMiddleware(),        # web_search, read_web_page
-        AdvancedMiddleware(),   # finder, look_at, librarian, oracle
-        MemoryMiddleware(       # Persistent memory across sessions
-            sources=["/memories/preferences.md", "/memories/patterns.md"]
-        ),
-        SkillsMiddleware(       # Progressive disclosure skills
-            sources=["/skills/user/", "/skills/project/"]
-        ),
-    ]
+    memory=["/memories/preferences.md", "/memories/patterns.md"],
+    skills=["/skills/user/", "/skills/project/"],
 )
 ```
+
+**Core middleware includes:** TodoList, Filesystem, SubAgents, Summarization, PromptCaching, Utilities, Web, Advanced AI tools, Memory, Skills, Compaction, and more.
 
 ### 3. Intelligent Subagent Delegation
 
@@ -433,9 +426,9 @@ When Playwright MCP is configured:
 
 ## 🎨 Middleware Architecture
 
-AG3NT's power comes from its composable middleware system:
+AG3NT's power comes from its composable middleware system. All middleware is included by default and works together to provide a complete agent experience:
 
-### Core Middleware (Included by Default)
+### Core Middleware (All Included by Default)
 
 | Middleware | Purpose |
 |------------|---------|
@@ -443,42 +436,18 @@ AG3NT's power comes from its composable middleware system:
 | **`FilesystemMiddleware`** | File operations and context offloading |
 | **`SubAgentMiddleware`** | Delegate tasks to isolated sub-agents |
 | **`SummarizationMiddleware`** | Auto-summarizes when context exceeds 170k tokens |
-| **`AnthropicPromptCachingMiddleware`** | Caches system prompts to reduce costs |
+| **`PromptCachingMiddleware`** | Caches system prompts to reduce costs and latency |
 | **`HumanInTheLoopMiddleware`** | Pauses execution for human approval |
-
-### Extended Middleware (Optional)
-
-| Middleware | Purpose |
-|------------|---------|
-| **`UtilitiesMiddleware`** | Development helper tools |
-| **`WebMiddleware`** | Web content access |
-| **`AdvancedMiddleware`** | AI-powered analysis tools |
+| **`UtilitiesMiddleware`** | Development helper tools (undo_edit, mermaid, format_file) |
+| **`WebMiddleware`** | Web content access (web_search, read_web_page) |
+| **`AdvancedMiddleware`** | AI-powered analysis tools (finder, look_at, librarian) |
 | **`MemoryMiddleware`** | Persistent learning across sessions |
 | **`SkillsMiddleware`** | Progressive disclosure skills system |
-| **`CompactionMiddleware`** | Context window management |
+| **`CompactionMiddleware`** | Context window management and artifact storage |
+| **`ImageGenerationMiddleware`** | AI image generation via DALL-E/Flux |
+| **`PatchToolCallsMiddleware`** | Ensures tool call format compatibility |
 
-**Enable extended middleware:**
-
-```python
-from deepagents import create_deep_agent
-from deepagents.middleware import (
-    UtilitiesMiddleware,
-    WebMiddleware,
-    AdvancedMiddleware,
-    MemoryMiddleware,
-    SkillsMiddleware,
-)
-
-agent = create_deep_agent(
-    middleware=[
-        UtilitiesMiddleware(),
-        WebMiddleware(),
-        AdvancedMiddleware(),
-        MemoryMiddleware(sources=["/memories/"]),
-        SkillsMiddleware(sources=["/skills/"]),
-    ]
-)
-```
+All middleware works together seamlessly - no configuration required for standard use cases.
 
 ## 💡 Real-World Use Cases
 
