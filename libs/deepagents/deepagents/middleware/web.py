@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +62,7 @@ Best practices:
 
 
 # --- Tool Implementations ---
+
 
 async def _search_web(
     objective: str,
@@ -186,6 +183,7 @@ async def _read_web_page(
             if "application/json" in content_type:
                 # Return JSON as-is formatted
                 import json
+
                 try:
                     data = response.json()
                     return f"```json\n{json.dumps(data, indent=2)}\n```"
@@ -221,8 +219,8 @@ async def _read_web_page(
 
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to markdown (basic implementation)."""
-    from html.parser import HTMLParser
     import re
+    from html.parser import HTMLParser
 
     class HTMLToMarkdown(HTMLParser):
         def __init__(self):
@@ -338,12 +336,12 @@ def _filter_by_objective(content: str, objective: str) -> str:
 
     if relevant_sections:
         return "\n".join(relevant_sections)
-    else:
-        # Fall back to returning start of content
-        return content[:10000] + "\n\n[Filtered content - no sections matched objective]"
+    # Fall back to returning start of content
+    return content[:10000] + "\n\n[Filtered content - no sections matched objective]"
 
 
 # --- Tool Generators ---
+
 
 def _web_search_tool_generator(custom_description: str | None = None) -> BaseTool:
     """Generate the web_search tool."""
@@ -362,9 +360,8 @@ def _web_search_tool_generator(custom_description: str | None = None) -> BaseToo
         runtime: ToolRuntime = None,
     ) -> str:
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            _search_web(objective, search_queries)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(_search_web(objective, search_queries))
 
     return StructuredTool.from_function(
         name="web_search",
@@ -393,9 +390,8 @@ def _read_web_page_tool_generator(custom_description: str | None = None) -> Base
         runtime: ToolRuntime = None,
     ) -> str:
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            _read_web_page(url, objective, forceRefetch)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(_read_web_page(url, objective, forceRefetch))
 
     return StructuredTool.from_function(
         name="read_web_page",
@@ -486,9 +482,7 @@ class WebMiddleware(AgentMiddleware):
         agent = create_agent(middleware=[WebMiddleware()])
 
         # Enable only web_search
-        agent = create_agent(
-            middleware=[WebMiddleware(enabled_tools=["web_search"])]
-        )
+        agent = create_agent(middleware=[WebMiddleware(enabled_tools=["web_search"])])
         ```
     """
 
@@ -512,11 +506,7 @@ class WebMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or WEB_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return handler(request)
@@ -530,11 +520,7 @@ class WebMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or WEB_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return await handler(request)

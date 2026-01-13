@@ -5,8 +5,8 @@ import pytest
 from deepagents.compaction.models import Confidence
 from deepagents.research import (
     Distiller,
-    Extractor,
     ExtractionResult,
+    Extractor,
     PageContent,
     ResearchConfig,
 )
@@ -14,17 +14,17 @@ from deepagents.research import (
 
 class TestExtractor:
     """Tests for Extractor."""
-    
+
     @pytest.fixture
     def config(self):
         """Create test configuration."""
         return ResearchConfig()
-    
+
     @pytest.fixture
     def extractor(self, config):
         """Create an extractor."""
         return Extractor(config)
-    
+
     def test_extract_basic(self, extractor):
         """Test basic extraction."""
         content = PageContent(
@@ -32,13 +32,13 @@ class TestExtractor:
             title="Test Article",
             content="This is a test article about Python programming.",
         )
-        
+
         result = extractor.extract(content, "art_123")
-        
+
         assert result.source_url == "https://example.com"
         assert result.artifact_id == "art_123"
         assert result.error is None
-    
+
     def test_extract_key_facts(self, extractor):
         """Test key fact extraction."""
         content = PageContent(
@@ -50,27 +50,27 @@ class TestExtractor:
             Revenue grew by $1,000,000 last quarter.
             """,
         )
-        
+
         result = extractor.extract(content, "art_123")
-        
+
         assert len(result.key_facts) > 0
         # Should find percentage, announcement, and dollar amount
-    
+
     def test_extract_quotes(self, extractor):
         """Test quote extraction."""
         content = PageContent(
             url="https://example.com",
             title="Interview",
-            content='''
+            content="""
             The CEO said "This is a significant milestone for our company and we are excited about the future."
             Another expert noted "The technology is revolutionary and will change everything."
-            ''',
+            """,
         )
-        
+
         result = extractor.extract(content, "art_123")
-        
+
         assert len(result.quotes) >= 1
-    
+
     def test_extract_entities(self, extractor):
         """Test entity extraction."""
         content = PageContent(
@@ -78,12 +78,12 @@ class TestExtractor:
             title="News",
             content="Microsoft Corporation announced that Google Cloud and Amazon Web Services are competitors.",
         )
-        
+
         result = extractor.extract(content, "art_123")
-        
+
         assert len(result.entities) > 0
         assert any("Microsoft" in e for e in result.entities)
-    
+
     def test_extract_with_error(self, extractor):
         """Test extraction with error content."""
         content = PageContent(
@@ -92,12 +92,12 @@ class TestExtractor:
             content="",
             error="Connection failed",
         )
-        
+
         result = extractor.extract(content, "art_123")
-        
+
         assert result.error == "Connection failed"
         assert len(result.key_facts) == 0
-    
+
     def test_relevance_calculation(self, extractor):
         """Test relevance calculation."""
         content = PageContent(
@@ -105,25 +105,25 @@ class TestExtractor:
             title="Python Guide",
             content="Python programming language is great for data science and machine learning.",
         )
-        
+
         result = extractor.extract(content, "art_123", goal="Python programming")
-        
+
         assert result.topic_relevance > 0.5
 
 
 class TestDistiller:
     """Tests for Distiller."""
-    
+
     @pytest.fixture
     def config(self):
         """Create test configuration."""
         return ResearchConfig(bundle_token_budget=500)
-    
+
     @pytest.fixture
     def distiller(self, config):
         """Create a distiller."""
         return Distiller(config)
-    
+
     def test_distill_basic(self, distiller):
         """Test basic distillation."""
         extractions = [
@@ -134,12 +134,12 @@ class TestDistiller:
                 quotes=["Python is the best language for beginners"],
             ),
         ]
-        
+
         findings = distiller.distill(extractions, "Python programming")
-        
+
         assert len(findings) > 0
         assert all(f.evidence_artifact_ids for f in findings)
-    
+
     def test_distill_corroboration(self, distiller):
         """Test that corroborated facts get higher confidence."""
         extractions = [
@@ -159,13 +159,13 @@ class TestDistiller:
                 key_facts=["Python usage increased by 25%"],
             ),
         ]
-        
+
         findings = distiller.distill(extractions, "Python growth")
-        
+
         # Should have high confidence due to corroboration
         high_conf = [f for f in findings if f.confidence == Confidence.HIGH]
         assert len(high_conf) > 0
-    
+
     def test_distill_token_budget(self, distiller):
         """Test token budget enforcement."""
         # Create many extractions
@@ -178,10 +178,9 @@ class TestDistiller:
             )
             for i in range(10)
         ]
-        
+
         findings = distiller.distill(extractions, "test", token_budget=200)
-        
+
         # Should be limited by token budget
         total_chars = sum(len(f.claim) for f in findings)
         assert total_chars < 200 * 4 + 500  # Some overhead allowed
-

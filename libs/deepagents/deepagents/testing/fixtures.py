@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FixtureMessage:
     """A recorded message in a fixture."""
-    
+
     role: Literal["user", "assistant", "tool"]
     content: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -34,7 +34,7 @@ class FixtureMessage:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FixtureMessage":
+    def from_dict(cls, data: dict[str, Any]) -> FixtureMessage:
         """Create from dictionary."""
         return cls(
             role=data["role"],
@@ -48,7 +48,7 @@ class FixtureMessage:
 @dataclass
 class FixtureResult:
     """Result of running a fixture."""
-    
+
     fixture_name: str
     passed: bool
     expected_output: str | None
@@ -80,7 +80,7 @@ class AgentFixture:
     - Expected final output
     - Metadata (model, timestamp, etc.)
     """
-    
+
     name: str
     description: str
     messages: list[FixtureMessage]
@@ -106,7 +106,7 @@ class AgentFixture:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "AgentFixture":
+    def from_dict(cls, data: dict[str, Any]) -> AgentFixture:
         """Create from dictionary."""
         return cls(
             name=data["name"],
@@ -129,7 +129,7 @@ class AgentFixture:
         logger.info(f"Saved fixture to {path}")
 
     @classmethod
-    def load(cls, path: Path | str) -> "AgentFixture":
+    def load(cls, path: Path | str) -> AgentFixture:
         """Load fixture from JSON file."""
         path = Path(path)
         with open(path) as f:
@@ -139,4 +139,3 @@ class AgentFixture:
     def get_input_messages(self) -> list[FixtureMessage]:
         """Get only user input messages."""
         return [m for m in self.messages if m.role == "user"]
-

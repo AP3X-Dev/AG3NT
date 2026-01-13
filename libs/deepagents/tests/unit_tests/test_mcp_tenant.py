@@ -136,4 +136,3 @@ class TestClientPool:
 
         key = pool.get_pool_key("math", config)
         assert key == ("math", "my-tenant")
-

@@ -56,7 +56,7 @@ class ContextEngineeringMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        model: "BaseChatModel | None" = None,
+        model: BaseChatModel | None = None,
         config: ContextEngineeringConfig | None = None,
         workspace_dir: Any | None = None,
     ) -> None:
@@ -71,6 +71,7 @@ class ContextEngineeringMiddleware(AgentMiddleware):
         self.config = config or ContextEngineeringConfig()
         if workspace_dir is not None:
             from pathlib import Path
+
             self.config.workspace_dir = Path(workspace_dir)
 
         self.budget_tracker = TokenBudgetTracker(self.config)
@@ -248,6 +249,7 @@ class ContextEngineeringMiddleware(AgentMiddleware):
 
         # Store for later retrieval
         from deepagents.compaction.models import MaskedObservationPlaceholder
+
         if isinstance(masked, MaskedObservationPlaceholder):
             self._masked_outputs[masked.artifact_id] = content
             return ToolMessage(
@@ -270,4 +272,3 @@ class ContextEngineeringMiddleware(AgentMiddleware):
             "summarization_recommended": report.summarization_recommended,
             "step_count": self.budget_tracker.step_count,
         }
-

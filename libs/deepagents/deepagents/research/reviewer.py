@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from deepagents.compaction.models import Confidence, Finding, ResearchBundle
+from deepagents.compaction.models import Confidence, ResearchBundle
 from deepagents.research.config import ResearchConfig
 from deepagents.research.models import ResearchBrief
 
@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ReviewStatus(str, Enum):
     """Status of a review."""
-    
+
     PASSED = "passed"
     NEEDS_FOLLOWUP = "needs_followup"
     FAILED = "failed"
@@ -39,7 +39,7 @@ class ReviewStatus(str, Enum):
 
 class GapType(str, Enum):
     """Types of gaps identified in research."""
-    
+
     MISSING_OUTPUT = "missing_output"
     LOW_CONFIDENCE = "low_confidence"
     INSUFFICIENT_SOURCES = "insufficient_sources"
@@ -51,7 +51,7 @@ class GapType(str, Enum):
 @dataclass
 class Gap:
     """A gap identified in the research."""
-    
+
     gap_type: GapType
     description: str
     severity: str = "medium"  # low, medium, high
@@ -61,7 +61,7 @@ class Gap:
 @dataclass
 class FollowUpTask:
     """A follow-up task to address a gap."""
-    
+
     goal: str
     reason: str
     priority: int = 1  # 1 = highest
@@ -71,38 +71,38 @@ class FollowUpTask:
 @dataclass
 class ReviewResult:
     """Result of reviewing research quality."""
-    
+
     status: ReviewStatus
-    
+
     # Quality metrics
     evidence_coverage: float = 0.0
     source_diversity: float = 0.0
     confidence_distribution: dict[str, int] = field(default_factory=dict)
-    
+
     # Gaps and follow-ups
     gaps: list[Gap] = field(default_factory=list)
     follow_up_tasks: list[FollowUpTask] = field(default_factory=list)
-    
+
     # Summary
     summary: str = ""
 
 
 class Reviewer:
     """Reviews research quality and generates follow-up tasks.
-    
+
     The Reviewer validates that research meets quality gates:
     - All required outputs are covered with evidence
     - Source diversity requirements are met
     - Confidence levels are acceptable
     - Claims are properly cited
-    
+
     Args:
         config: Research configuration.
     """
-    
+
     def __init__(self, config: ResearchConfig) -> None:
         self.config = config
-    
+
     def review(
         self,
         bundle: ResearchBundle,
@@ -110,42 +110,42 @@ class Reviewer:
         ledger: EvidenceLedger,
     ) -> ReviewResult:
         """Review a research bundle for quality.
-        
+
         Args:
             bundle: The research bundle to review.
             brief: The original research brief.
             ledger: The evidence ledger.
-            
+
         Returns:
             ReviewResult with gaps and follow-up tasks.
         """
         gaps: list[Gap] = []
-        
+
         # Check required outputs
         output_gaps = self._check_required_outputs(bundle, brief)
         gaps.extend(output_gaps)
-        
+
         # Check source diversity
         diversity_gaps = self._check_source_diversity(ledger, brief)
         gaps.extend(diversity_gaps)
-        
+
         # Check confidence levels
         confidence_gaps = self._check_confidence_levels(bundle)
         gaps.extend(confidence_gaps)
-        
+
         # Check citations
         if self.config.citation_required:
             citation_gaps = self._check_citations(bundle)
             gaps.extend(citation_gaps)
-        
+
         # Calculate metrics
         evidence_coverage = self._calculate_evidence_coverage(bundle, brief)
         source_diversity = self._calculate_source_diversity(ledger)
         confidence_dist = self._get_confidence_distribution(bundle)
-        
+
         # Generate follow-up tasks
         follow_ups = self._generate_follow_ups(gaps, brief)
-        
+
         # Determine status
         high_severity_gaps = [g for g in gaps if g.severity == "high"]
         if high_severity_gaps:
@@ -154,10 +154,10 @@ class Reviewer:
             status = ReviewStatus.PASSED  # Minor gaps are OK
         else:
             status = ReviewStatus.PASSED
-        
+
         # Generate summary
         summary = self._generate_summary(bundle, gaps, evidence_coverage)
-        
+
         return ReviewResult(
             status=status,
             evidence_coverage=evidence_coverage,
@@ -185,12 +185,14 @@ class Reviewer:
                     break
 
             if not found:
-                gaps.append(Gap(
-                    gap_type=GapType.MISSING_OUTPUT,
-                    description=f"Required output not found: {required}",
-                    severity="high",
-                    suggested_query=f"{brief.goal} {required}",
-                ))
+                gaps.append(
+                    Gap(
+                        gap_type=GapType.MISSING_OUTPUT,
+                        description=f"Required output not found: {required}",
+                        severity="high",
+                        suggested_query=f"{brief.goal} {required}",
+                    )
+                )
 
         return gaps
 
@@ -206,12 +208,14 @@ class Reviewer:
         min_domains = self.config.source_diversity_min_domains
 
         if len(unique_domains) < min_domains:
-            gaps.append(Gap(
-                gap_type=GapType.DOMAIN_DIVERSITY,
-                description=f"Only {len(unique_domains)} domains consulted, need {min_domains}",
-                severity="medium",
-                suggested_query=f"{brief.goal} site:different-domain.com",
-            ))
+            gaps.append(
+                Gap(
+                    gap_type=GapType.DOMAIN_DIVERSITY,
+                    description=f"Only {len(unique_domains)} domains consulted, need {min_domains}",
+                    severity="medium",
+                    suggested_query=f"{brief.goal} site:different-domain.com",
+                )
+            )
 
         return gaps
 
@@ -220,11 +224,13 @@ class Reviewer:
         gaps = []
 
         if not bundle.findings:
-            gaps.append(Gap(
-                gap_type=GapType.LOW_CONFIDENCE,
-                description="No findings extracted from sources",
-                severity="high",
-            ))
+            gaps.append(
+                Gap(
+                    gap_type=GapType.LOW_CONFIDENCE,
+                    description="No findings extracted from sources",
+                    severity="high",
+                )
+            )
             return gaps
 
         # Count by confidence
@@ -232,11 +238,13 @@ class Reviewer:
         total = len(bundle.findings)
 
         if high / total < 0.2:
-            gaps.append(Gap(
-                gap_type=GapType.LOW_CONFIDENCE,
-                description=f"Only {high}/{total} findings have high confidence",
-                severity="medium",
-            ))
+            gaps.append(
+                Gap(
+                    gap_type=GapType.LOW_CONFIDENCE,
+                    description=f"Only {high}/{total} findings have high confidence",
+                    severity="medium",
+                )
+            )
 
         return gaps
 
@@ -246,11 +254,13 @@ class Reviewer:
 
         for finding in bundle.findings:
             if not finding.evidence_artifact_ids:
-                gaps.append(Gap(
-                    gap_type=GapType.UNCITED_CLAIM,
-                    description=f"Uncited claim: {finding.claim[:50]}...",
-                    severity="medium",
-                ))
+                gaps.append(
+                    Gap(
+                        gap_type=GapType.UNCITED_CLAIM,
+                        description=f"Uncited claim: {finding.claim[:50]}...",
+                        severity="medium",
+                    )
+                )
 
         return gaps
 
@@ -307,12 +317,14 @@ class Reviewer:
             if gap.suggested_query:
                 queries.append(gap.suggested_query)
 
-            follow_ups.append(FollowUpTask(
-                goal=f"Address gap: {gap.description}",
-                reason=f"Gap type: {gap.gap_type.value}",
-                priority=1 if gap.severity == "high" else 2,
-                suggested_queries=queries,
-            ))
+            follow_ups.append(
+                FollowUpTask(
+                    goal=f"Address gap: {gap.description}",
+                    reason=f"Gap type: {gap.gap_type.value}",
+                    priority=1 if gap.severity == "high" else 2,
+                    suggested_queries=queries,
+                )
+            )
 
         return follow_ups
 

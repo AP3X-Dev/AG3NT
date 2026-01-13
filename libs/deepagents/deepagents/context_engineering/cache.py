@@ -11,7 +11,6 @@ The cache is in-memory with optional persistence to disk.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -26,7 +25,7 @@ T = TypeVar("T")
 @dataclass
 class CacheEntry(Generic[T]):
     """A cached value with metadata."""
-    
+
     value: T
     content_hash: str
     created_at: float = field(default_factory=time.time)
@@ -40,7 +39,7 @@ class CacheEntry(Generic[T]):
 @dataclass
 class CacheStats:
     """Statistics about cache usage."""
-    
+
     hits: int = 0
     misses: int = 0
     evictions: int = 0
@@ -65,12 +64,12 @@ class CacheStats:
 
 class PromptAssemblyCache:
     """Cache for prompt assembly components.
-    
+
     Caches:
     - AGENTS.md content by file hash
     - Skills metadata by directory hash
     - Assembled prompt fragments
-    
+
     Thread-safe for read operations.
     """
 
@@ -80,7 +79,7 @@ class PromptAssemblyCache:
         cache_dir: Path | None = None,
     ) -> None:
         """Initialize cache.
-        
+
         Args:
             max_entries: Maximum cache entries before eviction.
             cache_dir: Optional directory for persistent cache.
@@ -110,11 +109,11 @@ class PromptAssemblyCache:
 
     def get(self, key: str, current_hash: str) -> Any | None:
         """Get cached value if valid.
-        
+
         Args:
             key: Cache key.
             current_hash: Current content hash for validation.
-            
+
         Returns:
             Cached value if valid, None otherwise.
         """
@@ -124,13 +123,13 @@ class PromptAssemblyCache:
             self._stats.hits += 1
             logger.debug(f"Cache hit for {key}")
             return entry.value
-        
+
         self._stats.misses += 1
         return None
 
     def set(self, key: str, value: Any, content_hash: str) -> None:
         """Set cached value.
-        
+
         Args:
             key: Cache key.
             value: Value to cache.
@@ -139,7 +138,7 @@ class PromptAssemblyCache:
         # Evict if at capacity
         if len(self._cache) >= self.max_entries:
             self._evict_oldest()
-        
+
         self._cache[key] = CacheEntry(
             value=value,
             content_hash=content_hash,
@@ -165,4 +164,3 @@ class PromptAssemblyCache:
         """Clear all cache entries."""
         self._cache.clear()
         self._stats = CacheStats()
-

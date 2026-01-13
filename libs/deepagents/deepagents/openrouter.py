@@ -102,4 +102,3 @@ def get_default_openrouter_model() -> BaseChatModel:
         ValueError: If OPENROUTER_API_KEY is not set.
     """
     return get_openrouter_model()
-

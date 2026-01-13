@@ -7,7 +7,6 @@ from deepagents.mcp.config import (
     FailBehavior,
     MCPConfig,
     MCPServerConfig,
-    ServerInstanceScope,
     TenantMode,
 )
 
@@ -155,4 +154,3 @@ class TestMCPConfig:
         assert config.get_server_fail_behavior("math") == FailBehavior.FAIL_CLOSED
         # Global default
         assert config.get_server_fail_behavior("api") == FailBehavior.FAIL_OPEN
-

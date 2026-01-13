@@ -11,16 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from deepagents.research.config import ResearchConfig
 from deepagents.research.models import (
     ResearchBrief,
-    ResearchMode,
     SourceQueueItem,
     SourceReasonCode,
 )
@@ -29,12 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class SearchResult:
     """A single search result from a provider."""
-    
+
     def __init__(
         self,
         url: str,
@@ -51,7 +48,7 @@ class SearchResult:
         self.source = source
         self.publish_date = publish_date
         self.rank = rank
-    
+
     @property
     def domain(self) -> str:
         """Extract domain from URL."""
@@ -64,13 +61,13 @@ class SearchResult:
 
 class SearchProvider(ABC):
     """Abstract base class for search providers."""
-    
+
     @property
     @abstractmethod
     def name(self) -> str:
         """Provider name."""
         ...
-    
+
     @abstractmethod
     async def search(
         self,
@@ -80,12 +77,12 @@ class SearchProvider(ABC):
         recency_days: int | None = None,
     ) -> list[SearchResult]:
         """Execute a search query.
-        
+
         Args:
             query: The search query.
             max_results: Maximum number of results.
             recency_days: Only return results from last N days.
-            
+
         Returns:
             List of search results.
         """
@@ -94,11 +91,11 @@ class SearchProvider(ABC):
 
 class MockSearchProvider(SearchProvider):
     """Mock search provider for testing."""
-    
+
     @property
     def name(self) -> str:
         return "mock"
-    
+
     async def search(
         self,
         query: str,
@@ -110,13 +107,15 @@ class MockSearchProvider(SearchProvider):
         # Generate deterministic mock results based on query
         results = []
         for i in range(min(5, max_results)):
-            results.append(SearchResult(
-                url=f"https://example{i}.com/{query.replace(' ', '-')}",
-                title=f"Result {i+1} for {query}",
-                snippet=f"This is a sample result about {query}...",
-                source="mock",
-                rank=i,
-            ))
+            results.append(
+                SearchResult(
+                    url=f"https://example{i}.com/{query.replace(' ', '-')}",
+                    title=f"Result {i + 1} for {query}",
+                    snippet=f"This is a sample result about {query}...",
+                    source="mock",
+                    rank=i,
+                )
+            )
         return results
 
 
@@ -129,26 +128,21 @@ DOMAIN_AUTHORITY_SCORES: dict[str, float] = {
     "cloud.google.com": 0.90,
     "aws.amazon.com": 0.90,
     "docs.github.com": 0.90,
-    
     # Academic/research
     "arxiv.org": 0.95,
     "scholar.google.com": 0.90,
     "pubmed.ncbi.nlm.nih.gov": 0.95,
-    
     # News/tech
     "techcrunch.com": 0.70,
     "theverge.com": 0.65,
     "arstechnica.com": 0.75,
     "wired.com": 0.70,
-    
     # Stack Overflow / Q&A
     "stackoverflow.com": 0.80,
     "superuser.com": 0.75,
-    
     # Wikipedia
     "en.wikipedia.org": 0.80,
     "wikipedia.org": 0.75,
-    
     # GitHub
     "github.com": 0.80,
 }
@@ -157,16 +151,16 @@ DOMAIN_AUTHORITY_SCORES: dict[str, float] = {
 def get_domain_authority(domain: str) -> float:
     """Get authority score for a domain."""
     domain = domain.lower()
-    
+
     # Check exact match
     if domain in DOMAIN_AUTHORITY_SCORES:
         return DOMAIN_AUTHORITY_SCORES[domain]
-    
+
     # Check partial match (e.g., subdomain)
     for known_domain, score in DOMAIN_AUTHORITY_SCORES.items():
         if known_domain in domain or domain.endswith(known_domain):
             return score
-    
+
     # Default score
     return 0.5
 
@@ -391,7 +385,7 @@ class SourceCollector:
         queue_items.sort(key=lambda x: x.rank_score, reverse=True)
 
         # Limit to max sources
-        queue_items = queue_items[:brief.max_sources]
+        queue_items = queue_items[: brief.max_sources]
 
         logger.info(f"Collected {len(queue_items)} sources from {len(seen_domains)} domains")
         return queue_items

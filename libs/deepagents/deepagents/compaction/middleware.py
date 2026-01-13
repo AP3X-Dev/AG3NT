@@ -14,7 +14,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -34,9 +34,6 @@ from deepagents.compaction.models import MaskedObservationPlaceholder
 from deepagents.compaction.observation_masker import ObservationMasker
 from deepagents.compaction.retrieval import RetrievalIndex
 from deepagents.compaction.summarizer import ReasoningStateSummarizer
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +114,7 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _build_save_artifact_tool(self) -> BaseTool:
         """Build the save_artifact tool."""
+
         def save_artifact(
             content: str,
             runtime: ToolRuntime,
@@ -157,6 +155,7 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _build_read_artifact_tool(self) -> BaseTool:
         """Build the read_artifact tool."""
+
         def read_artifact(
             artifact_id: str,
             runtime: ToolRuntime,
@@ -183,11 +182,11 @@ class CompactionMiddleware(AgentMiddleware):
 
             # Apply offset and limit
             lines = content.split("\n")
-            selected = lines[offset:offset + limit]
+            selected = lines[offset : offset + limit]
             result = "\n".join(selected)
 
             if offset > 0 or offset + limit < len(lines):
-                result += f"\n\n[Showing lines {offset+1}-{min(offset+limit, len(lines))} of {len(lines)}]"
+                result += f"\n\n[Showing lines {offset + 1}-{min(offset + limit, len(lines))} of {len(lines)}]"
 
             return result
 
@@ -199,6 +198,7 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _build_search_artifacts_tool(self) -> BaseTool:
         """Build the search_artifacts tool."""
+
         def search_artifacts(
             runtime: ToolRuntime,
             *,
@@ -233,10 +233,7 @@ class CompactionMiddleware(AgentMiddleware):
             for meta in results:
                 title = meta.title or "(untitled)"
                 url = f" | URL: {meta.source_url}" if meta.source_url else ""
-                lines.append(
-                    f"- {meta.artifact_id}: {title} | {meta.tool_name} | "
-                    f"{meta.size_bytes:,} bytes{url}"
-                )
+                lines.append(f"- {meta.artifact_id}: {title} | {meta.tool_name} | {meta.size_bytes:,} bytes{url}")
             return "\n".join(lines)
 
         return StructuredTool.from_function(
@@ -247,6 +244,7 @@ class CompactionMiddleware(AgentMiddleware):
 
     def _build_retrieve_snippets_tool(self) -> BaseTool:
         """Build the retrieve_snippets tool."""
+
         def retrieve_snippets(
             query: str,
             runtime: ToolRuntime,
@@ -289,9 +287,7 @@ class CompactionMiddleware(AgentMiddleware):
             result_lines = [f"Found {len(results)} snippet(s) matching '{query}':\n"]
             for result in results:
                 preview = result.snippet[:400] + "..." if len(result.snippet) > 400 else result.snippet
-                result_lines.append(
-                    f"[{result.artifact_id} | Line {result.line_number} | Score: {result.score:.2f}]"
-                )
+                result_lines.append(f"[{result.artifact_id} | Line {result.line_number} | Score: {result.score:.2f}]")
                 result_lines.append(preview)
                 result_lines.append("")
 
@@ -408,11 +404,7 @@ class CompactionMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or COMPACTION_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             return request.override(system_prompt=new_prompt)
 
         return request
@@ -459,4 +451,3 @@ class CompactionMiddleware(AgentMiddleware):
     def get_step_count(self) -> int:
         """Get the current step count."""
         return self._step_count
-

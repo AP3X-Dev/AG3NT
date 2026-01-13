@@ -43,16 +43,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-
-from langchain_core.language_models import BaseChatModel
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from langchain.agents.middleware import InterruptOnConfig
     from langchain.agents.middleware.types import AgentMiddleware
-    from langchain_core.tools import BaseTool
-    from langgraph.graph.state import CompiledStateGraph
-    from langgraph.types import Checkpointer
 
     from deepagents.backends.protocol import BackendProtocol
 
@@ -62,42 +56,42 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkspaceLayout:
     """Canonical workspace layout for AG3NT agents.
-    
+
     All paths are relative to workspace_root.
     """
-    
+
     workspace_root: Path
     """Root directory for all agent data."""
-    
+
     # Standard subdirectories
     compaction_dir: str = "compaction"
     """Directory for compaction artifacts."""
-    
+
     skills_dir: str = "skills"
     """Directory for user skills."""
-    
+
     memory_file: str = "AGENTS.md"
     """Memory file name."""
-    
+
     research_dir: str = "research_sessions"
     """Directory for research session data."""
-    
+
     def get_compaction_path(self) -> Path:
         """Get full path to compaction directory."""
         return self.workspace_root / self.compaction_dir
-    
+
     def get_skills_path(self) -> Path:
         """Get full path to skills directory."""
         return self.workspace_root / self.skills_dir
-    
+
     def get_memory_path(self) -> Path:
         """Get full path to memory file."""
         return self.workspace_root / self.memory_file
-    
+
     def get_research_path(self) -> Path:
         """Get full path to research directory."""
         return self.workspace_root / self.research_dir
-    
+
     def ensure_directories(self) -> None:
         """Create all required directories."""
         self.get_compaction_path().mkdir(parents=True, exist_ok=True)
@@ -151,9 +145,9 @@ class AG3NTConfig:
 
 def build_ag3nt_middleware_stack(
     config: AG3NTConfig,
-    backend: "BackendProtocol",
+    backend: BackendProtocol,
     workspace_layout: WorkspaceLayout,
-) -> list["AgentMiddleware"]:
+) -> list[AgentMiddleware]:
     """Build the canonical AG3NT middleware stack.
 
     ALL AG3NT agents get the same core capabilities:
@@ -220,6 +214,7 @@ def build_ag3nt_middleware_stack(
     if config.backend_type == "local":
         try:
             from deepagents_cli.shell import ShellMiddleware
+
             middleware.append(
                 ShellMiddleware(
                     workspace_root=str(workspace_layout.workspace_root),
@@ -227,9 +222,7 @@ def build_ag3nt_middleware_stack(
                 )
             )
         except ImportError:
-            logger.warning(
-                "ShellMiddleware not available - install deepagents-cli for local shell"
-            )
+            logger.warning("ShellMiddleware not available - install deepagents-cli for local shell")
 
     # Core tools - ALWAYS present, no feature flags
     middleware.append(ImageGenerationMiddleware(backend=backend))
@@ -272,4 +265,3 @@ def get_default_workspace_layout(agent_id: str = "default") -> WorkspaceLayout:
     home = Path.home()
     workspace_root = home / ".deepagents" / agent_id
     return WorkspaceLayout(workspace_root=workspace_root)
-

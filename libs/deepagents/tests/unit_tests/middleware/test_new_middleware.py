@@ -1,8 +1,6 @@
 """Tests for new middleware modules: UtilitiesMiddleware, WebMiddleware, AdvancedMiddleware."""
 
-import pytest
 
-from deepagents.backends import StateBackend
 from deepagents.middleware import AdvancedMiddleware, UtilitiesMiddleware, WebMiddleware
 from deepagents.middleware.advanced import get_librarian_subagent, get_oracle_subagent
 
@@ -88,4 +86,3 @@ class TestSubagentSpecs:
         assert "description" in spec
         assert "system_prompt" in spec
         assert "tools" in spec
-

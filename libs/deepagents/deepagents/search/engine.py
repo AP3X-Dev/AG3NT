@@ -10,15 +10,10 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from deepagents.backends.protocol import BackendProtocol
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +89,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 
                 self._embeddings = OpenAIEmbeddings(model=self.model)
             except ImportError:
-                raise ImportError(
-                    "langchain-openai not installed. "
-                    "Install with: pip install langchain-openai"
-                )
+                raise ImportError("langchain-openai not installed. Install with: pip install langchain-openai")
         return self._embeddings
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
@@ -189,7 +181,7 @@ class CodeSearchEngine:
             try:
                 texts = [c.text for c in chunks]
                 embeddings = await self.embedding_provider.embed_texts(texts)
-                for chunk, embedding in zip(chunks, embeddings):
+                for chunk, embedding in zip(chunks, embeddings, strict=False):
                     chunk.embedding = embedding
             except Exception as e:
                 logger.warning(f"Failed to embed chunks for {path}: {e}")
@@ -268,11 +260,53 @@ class CodeSearchEngine:
         # Extract keywords
         words = re.findall(r"\b\w+\b", query.lower())
         stopwords = {
-            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "must", "shall", "can", "for", "and", "or",
-            "but", "in", "on", "at", "to", "from", "with", "by", "that", "this",
-            "it", "its", "of", "all", "find", "where", "how", "what", "when",
+            "the",
+            "a",
+            "an",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "shall",
+            "can",
+            "for",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "from",
+            "with",
+            "by",
+            "that",
+            "this",
+            "it",
+            "its",
+            "of",
+            "all",
+            "find",
+            "where",
+            "how",
+            "what",
+            "when",
         }
         keywords = [w for w in words if w not in stopwords and len(w) > 2]
 
@@ -308,7 +342,7 @@ class CodeSearchEngine:
         if len(a) != len(b):
             return 0.0
 
-        dot_product = sum(x * y for x, y in zip(a, b))
+        dot_product = sum(x * y for x, y in zip(a, b, strict=False))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(x * x for x in b))
 
@@ -316,4 +350,3 @@ class CodeSearchEngine:
             return 0.0
 
         return dot_product / (norm_a * norm_b)
-

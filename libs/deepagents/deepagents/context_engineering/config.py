@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -66,6 +66,7 @@ class ContextEngineeringConfig:
         """Get workspace directory, creating temp if needed."""
         if self.workspace_dir is None:
             import tempfile
+
             self.workspace_dir = Path(tempfile.mkdtemp(prefix="deepagents_context_"))
         return self.workspace_dir
 
@@ -82,4 +83,3 @@ class ContextEngineeringConfig:
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count for text."""
         return len(text) // 4
-

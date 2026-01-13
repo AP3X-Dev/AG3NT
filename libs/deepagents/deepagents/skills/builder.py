@@ -9,11 +9,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import yaml
-
-from deepagents.skills.models import Skill, SkillBody, SkillMeta, SkillMode, SkillSpec
+from deepagents.skills.models import SkillMode, SkillSpec
 
 if TYPE_CHECKING:
     from deepagents.skills.config import SkillsConfig
@@ -22,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 # Template for SKILL.md
-SKILL_TEMPLATE = '''---
+SKILL_TEMPLATE = """---
 id: {id}
 name: {name}
 description: {description}
@@ -59,7 +57,7 @@ triggers: {triggers}
 ## Failure Modes and Recovery
 
 {failure_modes}
-'''
+"""
 
 
 class SkillBuilder:
@@ -69,7 +67,7 @@ class SkillBuilder:
     generating new skills from specifications.
     """
 
-    def __init__(self, config: "SkillsConfig"):
+    def __init__(self, config: SkillsConfig):
         """Initialize the builder.
 
         Args:
@@ -105,6 +103,7 @@ class SkillBuilder:
         # Write output schema if provided
         if spec.output_schema:
             import json
+
             schema_path = skill_dir / "schemas" / "output.json"
             schema_path.write_text(
                 json.dumps(spec.output_schema, indent=2),
@@ -123,6 +122,7 @@ class SkillBuilder:
         Returns:
             SKILL.md content string.
         """
+
         # Format lists for YAML
         def format_list(items: list[str]) -> str:
             if not items:
@@ -177,7 +177,7 @@ class SkillBuilder:
                 "Validate the output matches expected format",
                 "Return the result",
             ]
-        return "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
+        return "\n".join(f"{i + 1}. {step}" for i, step in enumerate(steps))
 
     def _generate_tool_usage_rules(self, spec: SkillSpec) -> str:
         """Generate Tool Usage Rules section."""
@@ -202,6 +202,7 @@ class SkillBuilder:
         """Generate Output Format section."""
         if spec.output_schema:
             import json
+
             return f"Output must conform to the following JSON schema:\n\n```json\n{json.dumps(spec.output_schema, indent=2)}\n```"
         return f"Output format: {spec.output_format or 'text'}"
 
@@ -293,4 +294,3 @@ class SkillBuilder:
         pattern = r"(?:please|can you|I need|help me)\s+(.+?)(?:\.|$)"
         matches = re.findall(pattern, transcript, re.IGNORECASE)
         return [m.strip() for m in matches[:5]] if matches else []
-

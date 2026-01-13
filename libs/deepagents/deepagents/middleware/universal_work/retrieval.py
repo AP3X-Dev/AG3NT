@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from deepagents.middleware.universal_work.models import (
-    LinkType,
     SuggestionType,
     TriageSuggestion,
     TriageSuggestionBundle,
@@ -32,6 +31,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RetrievalCandidate:
     """A candidate item from retrieval."""
+
     item: WorkItem
     score: float
     match_type: str  # "keyword", "embedding", "metadata"
@@ -59,7 +59,7 @@ class RetrievalBackend(ABC):
 
 class SimpleKeywordRetrieval(RetrievalBackend):
     """Simple keyword-based retrieval using in-memory search.
-    
+
     Uses basic text matching for v1. Can be replaced with:
     - Elasticsearch for production keyword search
     - Vector DB (Pinecone, Weaviate, etc.) for embeddings
@@ -71,14 +71,14 @@ class SimpleKeywordRetrieval(RetrievalBackend):
 
     def _tokenize(self, text: str) -> set[str]:
         """Simple tokenization."""
-        words = re.findall(r'\w+', text.lower())
+        words = re.findall(r"\w+", text.lower())
         return set(words)
 
     def index_item(self, item: WorkItem) -> None:
         """Index a WorkItem for keyword search."""
         text = f"{item.title} {item.body} {' '.join(item.labels)}"
         tokens = self._tokenize(text)
-        
+
         for token in tokens:
             if token not in self._index:
                 self._index[token] = set()
@@ -92,31 +92,31 @@ class SimpleKeywordRetrieval(RetrievalBackend):
     ) -> list[RetrievalCandidate]:
         """Search for items matching query keywords."""
         query_tokens = self._tokenize(query)
-        
+
         if not query_tokens:
             return []
-        
+
         # Score by token overlap
         item_scores: dict[str, float] = {}
         for token in query_tokens:
             if token in self._index:
                 for item_id in self._index[token]:
                     item_scores[item_id] = item_scores.get(item_id, 0) + 1
-        
+
         # Normalize scores
         max_score = len(query_tokens)
         for item_id in item_scores:
             item_scores[item_id] /= max_score
-        
+
         # Sort by score and get top items
         sorted_ids = sorted(item_scores.keys(), key=lambda x: item_scores[x], reverse=True)
-        
+
         candidates = []
         for item_id in sorted_ids[:limit]:
             item = self.storage.get_work_item(item_id)
             if item is None:
                 continue
-            
+
             # Apply filters
             if filters:
                 if filters.get("status") and item.status != filters["status"]:
@@ -125,14 +125,16 @@ class SimpleKeywordRetrieval(RetrievalBackend):
                     continue
                 if filters.get("exclude_id") and item.id == filters["exclude_id"]:
                     continue
-            
-            candidates.append(RetrievalCandidate(
-                item=item,
-                score=item_scores[item_id],
-                match_type="keyword",
-                matched_text=f"Matched {int(item_scores[item_id] * max_score)}/{max_score} keywords",
-            ))
-        
+
+            candidates.append(
+                RetrievalCandidate(
+                    item=item,
+                    score=item_scores[item_id],
+                    match_type="keyword",
+                    matched_text=f"Matched {int(item_scores[item_id] * max_score)}/{max_score} keywords",
+                )
+            )
+
         return candidates
 
     def rebuild_index(self) -> None:
@@ -168,8 +170,8 @@ class DuplicateReranker(Reranker):
         text1 = f"{item1.title} {item1.body}".lower()
         text2 = f"{item2.title} {item2.body}".lower()
 
-        tokens1 = set(re.findall(r'\w+', text1))
-        tokens2 = set(re.findall(r'\w+', text2))
+        tokens1 = set(re.findall(r"\w+", text1))
+        tokens2 = set(re.findall(r"\w+", text2))
 
         if not tokens1 or not tokens2:
             return 0.0
@@ -216,13 +218,15 @@ class DuplicateReranker(Reranker):
             if set(candidate.item.labels) & set(query_item.labels):
                 reasons.append("Shared labels")
 
-            suggestions.append(TriageSuggestion(
-                suggestion_type=SuggestionType.DUPLICATE,
-                suggested_value=candidate.item.id,
-                confidence=similarity,
-                reasons=reasons[:3],
-                evidence=[candidate.item.id],
-            ))
+            suggestions.append(
+                TriageSuggestion(
+                    suggestion_type=SuggestionType.DUPLICATE,
+                    suggested_value=candidate.item.id,
+                    confidence=similarity,
+                    reasons=reasons[:3],
+                    evidence=[candidate.item.id],
+                )
+            )
 
         return suggestions
 
@@ -275,13 +279,15 @@ class RelatedReranker(Reranker):
 
         suggestions = []
         for candidate, score, reasons in scored[:limit]:
-            suggestions.append(TriageSuggestion(
-                suggestion_type=SuggestionType.RELATED,
-                suggested_value=candidate.item.id,
-                confidence=score,
-                reasons=reasons[:3],
-                evidence=[candidate.item.id],
-            ))
+            suggestions.append(
+                TriageSuggestion(
+                    suggestion_type=SuggestionType.RELATED,
+                    suggested_value=candidate.item.id,
+                    confidence=score,
+                    reasons=reasons[:3],
+                    evidence=[candidate.item.id],
+                )
+            )
 
         return suggestions
 
@@ -374,4 +380,3 @@ class TriageEngine:
             )
 
         return bundle
-

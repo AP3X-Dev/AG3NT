@@ -1,16 +1,14 @@
 """Tests for skills models."""
 
+
 import pytest
-from datetime import datetime, timezone
 
 from deepagents.skills.models import (
+    SkillBody,
     SkillMeta,
     SkillMode,
-    SkillBody,
-    Skill,
     SkillSpec,
     SkillUsageRecord,
-    SkillValidationError,
 )
 
 
@@ -165,4 +163,3 @@ class TestSkillUsageRecord:
         assert record.skill_id == "test-skill"
         assert record.action == "applied"
         assert record.timestamp is not None
-

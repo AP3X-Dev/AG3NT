@@ -6,11 +6,8 @@ metrics, and debugging purposes.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from deepagents.skills.models import SkillUsageRecord
@@ -28,7 +25,7 @@ class SkillUsageLedger:
     maintains in-memory statistics.
     """
 
-    def __init__(self, config: "SkillsConfig"):
+    def __init__(self, config: SkillsConfig):
         """Initialize the ledger.
 
         Args:
@@ -166,4 +163,3 @@ class SkillUsageLedger:
             "stats": self.get_stats(),
             "blocked_tools": self.get_blocked_tools_report(),
         }
-

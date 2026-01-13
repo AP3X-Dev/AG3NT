@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.types import Command
 
 if TYPE_CHECKING:
     from deepagents.backends.protocol import BackendProtocol
@@ -115,6 +114,7 @@ For agent analysis of images/media, use the look_at tool instead."""
 
 # --- File Edit History State ---
 
+
 class EditHistoryEntry:
     """Represents a single edit that can be undone."""
 
@@ -140,11 +140,11 @@ def get_last_edit(path: str) -> EditHistoryEntry | None:
 
 def clear_edit_history(path: str) -> None:
     """Clear the edit history for a file."""
-    if path in _last_edit:
-        del _last_edit[path]
+    _last_edit.pop(path, None)
 
 
 # --- Tool Generators ---
+
 
 def _undo_edit_tool_generator(
     backend: BackendProtocol | Callable[[ToolRuntime], BackendProtocol],
@@ -174,12 +174,15 @@ def _undo_edit_tool_generator(
 
         # Generate diff showing what was undone
         from difflib import unified_diff
-        diff_lines = list(unified_diff(
-            last_edit.new_content.splitlines(keepends=True),
-            last_edit.old_content.splitlines(keepends=True),
-            fromfile=f"a{path}",
-            tofile=f"b{path}",
-        ))
+
+        diff_lines = list(
+            unified_diff(
+                last_edit.new_content.splitlines(keepends=True),
+                last_edit.old_content.splitlines(keepends=True),
+                fromfile=f"a{path}",
+                tofile=f"b{path}",
+            )
+        )
         diff_output = "".join(diff_lines) if diff_lines else "(No changes)"
 
         # Clear history after successful undo
@@ -190,6 +193,7 @@ def _undo_edit_tool_generator(
     def sync_undo_edit(path: str, runtime: ToolRuntime) -> str:
         """Sync version of undo_edit."""
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_undo_edit(path, runtime))
 
     return StructuredTool.from_function(
@@ -247,15 +251,14 @@ def _format_file_tool_generator(
         resolved_backend = _get_backend(runtime)
 
         # Check if backend supports formatting
-        if hasattr(resolved_backend, 'aformat_file'):
+        if hasattr(resolved_backend, "aformat_file"):
             try:
                 result = await resolved_backend.aformat_file(path)
-                if result.get('formatted'):
+                if result.get("formatted"):
                     return f"Successfully formatted {path}"
-                elif result.get('error'):
+                if result.get("error"):
                     return f"Formatting failed: {result['error']}"
-                else:
-                    return f"No formatting changes needed for {path}"
+                return f"No formatting changes needed for {path}"
             except Exception as e:
                 return f"Failed to format file: {e}"
         else:
@@ -264,6 +267,7 @@ def _format_file_tool_generator(
     def sync_format_file(path: str, runtime: ToolRuntime) -> str:
         """Sync version of format_file."""
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_format_file(path, runtime))
 
     return StructuredTool.from_function(
@@ -291,7 +295,7 @@ def _get_diagnostics_tool_generator(
         resolved_backend = _get_backend(runtime)
 
         # Check if backend supports diagnostics
-        if hasattr(resolved_backend, 'aget_diagnostics'):
+        if hasattr(resolved_backend, "aget_diagnostics"):
             try:
                 diagnostics = await resolved_backend.aget_diagnostics(path)
                 if not diagnostics:
@@ -300,11 +304,11 @@ def _get_diagnostics_tool_generator(
                 # Format diagnostics
                 output_lines = [f"Diagnostics for {path}:"]
                 for diag in diagnostics:
-                    severity = diag.get('severity', 'info')
-                    message = diag.get('message', '')
-                    file_path = diag.get('path', path)
-                    line = diag.get('line', 0)
-                    col = diag.get('column', 0)
+                    severity = diag.get("severity", "info")
+                    message = diag.get("message", "")
+                    file_path = diag.get("path", path)
+                    line = diag.get("line", 0)
+                    col = diag.get("column", 0)
 
                     output_lines.append(f"  [{severity.upper()}] {file_path}:{line}:{col}: {message}")
 
@@ -317,6 +321,7 @@ def _get_diagnostics_tool_generator(
     def sync_get_diagnostics(path: str, runtime: ToolRuntime) -> str:
         """Sync version of get_diagnostics."""
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_get_diagnostics(path, runtime))
 
     return StructuredTool.from_function(
@@ -325,7 +330,6 @@ def _get_diagnostics_tool_generator(
         func=sync_get_diagnostics,
         coroutine=async_get_diagnostics,
     )
-
 
 
 def _open_file_tool_generator(
@@ -453,9 +457,7 @@ class UtilitiesMiddleware(AgentMiddleware):
         agent = create_agent(middleware=[UtilitiesMiddleware()])
 
         # Enable only specific tools
-        agent = create_agent(
-            middleware=[UtilitiesMiddleware(enabled_tools=["undo_edit", "mermaid"])]
-        )
+        agent = create_agent(middleware=[UtilitiesMiddleware(enabled_tools=["undo_edit", "mermaid"])])
         ```
     """
 
@@ -487,11 +489,7 @@ class UtilitiesMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or UTILITIES_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return handler(request)
@@ -505,12 +503,7 @@ class UtilitiesMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or UTILITIES_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return await handler(request)
-

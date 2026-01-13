@@ -13,7 +13,7 @@ import math
 try:
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent
+    from mcp.types import TextContent, Tool
 except ImportError:
     print("MCP not installed. Install with: pip install mcp")
     raise
@@ -90,7 +90,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     elif name == "factorial":
         n = arguments["n"]
         if n < 0:
-            return [TextContent(type="text", text=f"Error: Factorial not defined for negative numbers")]
+            return [TextContent(type="text", text="Error: Factorial not defined for negative numbers")]
         result = math.factorial(n)
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -106,4 +106,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

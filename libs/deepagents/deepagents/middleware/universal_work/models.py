@@ -11,7 +11,7 @@ These models define the persistent entities for work management:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -26,11 +26,12 @@ def generate_id() -> str:
 
 def utc_now() -> datetime:
     """Get current UTC timestamp."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class WorkItemStatus(str, Enum):
     """Status of a WorkItem."""
+
     INBOX = "inbox"
     ACCEPTED = "accepted"
     IN_PROGRESS = "in_progress"
@@ -42,6 +43,7 @@ class WorkItemStatus(str, Enum):
 
 class PlanStepStatus(str, Enum):
     """Status of a PlanStep (maps to DeepAgents todo status)."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -49,6 +51,7 @@ class PlanStepStatus(str, Enum):
 
 class OwnerType(str, Enum):
     """Type of owner for a WorkItem."""
+
     HUMAN = "human"
     AGENT = "agent"
     UNASSIGNED = "unassigned"
@@ -56,6 +59,7 @@ class OwnerType(str, Enum):
 
 class LinkType(str, Enum):
     """Type of relationship between WorkItems."""
+
     DUPLICATE_OF = "duplicate_of"
     RELATED_TO = "related_to"
     BLOCKS = "blocks"
@@ -65,6 +69,7 @@ class LinkType(str, Enum):
 
 class Origin(BaseModel):
     """Source metadata for external intake."""
+
     source: str = Field(description="Source system (e.g., 'github', 'email', 'slack')")
     external_id: str | None = Field(default=None, description="ID in source system")
     url: str | None = Field(default=None, description="URL in source system")
@@ -73,12 +78,13 @@ class Origin(BaseModel):
 
 class PlanStep(BaseModel):
     """A step in a WorkItem plan.
-    
+
     Maps directly to DeepAgents todo items:
     - content -> PlanStep.content
-    - status -> PlanStep.status  
+    - status -> PlanStep.status
     - activeForm -> PlanStep.active_form
     """
+
     id: str = Field(default_factory=generate_id)
     work_item_id: str = Field(description="Parent WorkItem ID")
     content: str = Field(description="Task description")
@@ -112,6 +118,7 @@ class PlanStep(BaseModel):
 
 class WorkItem(BaseModel):
     """A persistent unit of work across any domain."""
+
     id: str = Field(default_factory=generate_id)
     title: str = Field(description="Short title for the work item")
     body: str = Field(default="", description="Detailed description")
@@ -132,6 +139,7 @@ class WorkItem(BaseModel):
 
 class Link(BaseModel):
     """Relationship between WorkItems."""
+
     id: str = Field(default_factory=generate_id)
     from_id: str = Field(description="Source WorkItem ID")
     to_id: str = Field(description="Target WorkItem ID")
@@ -143,6 +151,7 @@ class Link(BaseModel):
 
 class SessionState(str, Enum):
     """State of an agent session."""
+
     ACTIVE = "active"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -151,6 +160,7 @@ class SessionState(str, Enum):
 
 class AgentSession(BaseModel):
     """Visibility into agent work on a WorkItem."""
+
     id: str = Field(default_factory=generate_id)
     agent_id: str = Field(description="Agent identifier")
     work_item_id: str = Field(description="WorkItem being worked on")
@@ -162,6 +172,7 @@ class AgentSession(BaseModel):
 
 class ActivityType(str, Enum):
     """Type of agent activity."""
+
     STARTED = "started"
     STEP_COMPLETED = "step_completed"
     STEP_STARTED = "step_started"
@@ -174,6 +185,7 @@ class ActivityType(str, Enum):
 
 class AgentActivity(BaseModel):
     """Audit trail for agent actions."""
+
     id: str = Field(default_factory=generate_id)
     session_id: str = Field(description="Parent AgentSession ID")
     activity_type: ActivityType = Field(description="Type of activity")
@@ -184,6 +196,7 @@ class AgentActivity(BaseModel):
 
 class SuggestionType(str, Enum):
     """Type of triage suggestion."""
+
     DUPLICATE = "duplicate"
     RELATED = "related"
     ASSIGNEE = "assignee"
@@ -193,6 +206,7 @@ class SuggestionType(str, Enum):
 
 class FeedbackEvent(BaseModel):
     """Captures user corrections to improve ranking."""
+
     id: str = Field(default_factory=generate_id)
     work_item_id: str = Field(description="WorkItem the feedback is about")
     suggestion_type: SuggestionType = Field(description="Type of suggestion being corrected")
@@ -204,6 +218,7 @@ class FeedbackEvent(BaseModel):
 
 class TriageSuggestion(BaseModel):
     """A single triage suggestion with explanation."""
+
     suggestion_type: SuggestionType
     suggested_value: Any
     confidence: float = Field(ge=0.0, le=1.0)
@@ -213,10 +228,10 @@ class TriageSuggestion(BaseModel):
 
 class TriageSuggestionBundle(BaseModel):
     """Bundle of triage suggestions for a WorkItem."""
+
     work_item_id: str
     duplicates: list[TriageSuggestion] = Field(default_factory=list)
     related: list[TriageSuggestion] = Field(default_factory=list)
     assignee: TriageSuggestion | None = None
     priority: TriageSuggestion | None = None
     next_actions: list[TriageSuggestion] = Field(default_factory=list)
-

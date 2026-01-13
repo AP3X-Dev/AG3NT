@@ -1,17 +1,13 @@
 """Tests for Approval Policy module."""
 
-import tempfile
-from datetime import datetime
-from pathlib import Path
 
-import pytest
 
 from deepagents.approval import (
+    DEFAULT_TOOL_CLASSIFICATIONS,
     ApprovalLedger,
     ApprovalPolicy,
     ApprovalRecord,
     ToolRiskLevel,
-    DEFAULT_TOOL_CLASSIFICATIONS,
 )
 
 
@@ -45,9 +41,7 @@ class TestApprovalPolicy:
 
     def test_get_risk_level_override(self):
         """Test overriding default classifications."""
-        policy = ApprovalPolicy(
-            tool_classifications={"read_file": ToolRiskLevel.HIGH}
-        )
+        policy = ApprovalPolicy(tool_classifications={"read_file": ToolRiskLevel.HIGH})
         assert policy.get_risk_level("read_file") == ToolRiskLevel.HIGH
 
     def test_requires_approval_default(self):
@@ -79,7 +73,7 @@ class TestApprovalPolicy:
         """Test generating interrupt_on config."""
         policy = ApprovalPolicy(min_risk_for_approval=ToolRiskLevel.HIGH)
         config = policy.to_interrupt_on_config()
-        
+
         # HIGH and CRITICAL tools should be in config
         assert "shell" in config
         assert "web_search" in config
@@ -101,14 +95,14 @@ class TestApprovalLedger:
     def test_record_and_query(self):
         """Test recording and querying decisions."""
         ledger = ApprovalLedger()
-        
+
         record = ApprovalRecord(
             tool_name="shell",
             tool_args={"command": "ls"},
             decision="approve",
         )
         ledger.record(record)
-        
+
         results = ledger.get_records(tool_name="shell")
         assert len(results) == 1
         assert results[0].decision == "approve"
@@ -116,25 +110,25 @@ class TestApprovalLedger:
     def test_filter_by_decision(self):
         """Test filtering by decision type."""
         ledger = ApprovalLedger()
-        
+
         ledger.record(ApprovalRecord("shell", {}, "approve"))
         ledger.record(ApprovalRecord("shell", {}, "reject"))
         ledger.record(ApprovalRecord("write_file", {}, "approve"))
-        
+
         approved = ledger.get_records(decision="approve")
         assert len(approved) == 2
-        
+
         rejected = ledger.get_records(decision="reject")
         assert len(rejected) == 1
 
     def test_persistence(self, tmp_path):
         """Test ledger persistence to file."""
         ledger_path = tmp_path / "approvals.jsonl"
-        
+
         # Create and write
         ledger1 = ApprovalLedger(ledger_path)
         ledger1.record(ApprovalRecord("shell", {"cmd": "test"}, "approve"))
-        
+
         # Read back
         ledger2 = ApprovalLedger(ledger_path)
         records = ledger2.get_records()
@@ -144,15 +138,14 @@ class TestApprovalLedger:
     def test_stats(self):
         """Test statistics generation."""
         ledger = ApprovalLedger()
-        
+
         ledger.record(ApprovalRecord("shell", {}, "approve"))
         ledger.record(ApprovalRecord("shell", {}, "approve"))
         ledger.record(ApprovalRecord("shell", {}, "reject"))
         ledger.record(ApprovalRecord("write_file", {}, "approve"))
-        
+
         stats = ledger.get_stats()
         assert stats["total"] == 4
         assert stats["by_decision"]["approve"] == 3
         assert stats["by_decision"]["reject"] == 1
         assert stats["by_tool"]["shell"]["approve"] == 2
-

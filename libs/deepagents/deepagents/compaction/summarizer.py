@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
@@ -66,10 +65,7 @@ class ReasoningStateSummarizer:
 
         # Check token-based trigger
         if estimated_tokens is not None:
-            threshold = (
-                self.config.model_context_limit
-                * self.config.summarize_if_estimated_context_tokens_gt
-            )
+            threshold = self.config.model_context_limit * self.config.summarize_if_estimated_context_tokens_gt
             if estimated_tokens > threshold:
                 return True
 
@@ -110,7 +106,7 @@ class ReasoningStateSummarizer:
 
             # Extract facts
             for pattern in fact_patterns:
-                matches = re.findall(pattern, content, re.I)
+                matches = re.findall(pattern, content, re.IGNORECASE)
                 for match in matches[:3]:  # Limit per message
                     fact = match.strip()
                     if len(fact) > 20 and fact not in confirmed_facts:
@@ -118,7 +114,7 @@ class ReasoningStateSummarizer:
 
             # Extract hypotheses
             for pattern in hypothesis_patterns:
-                matches = re.findall(pattern, content, re.I)
+                matches = re.findall(pattern, content, re.IGNORECASE)
                 for match in matches[:2]:
                     hyp = match.strip()
                     if len(hyp) > 20 and hyp not in hypotheses:
@@ -126,7 +122,7 @@ class ReasoningStateSummarizer:
 
             # Extract questions
             for pattern in question_patterns:
-                matches = re.findall(pattern, content, re.I)
+                matches = re.findall(pattern, content, re.IGNORECASE)
                 for match in matches[:2]:
                     q = match.strip()
                     if len(q) > 10 and q not in open_questions:
@@ -182,9 +178,7 @@ class ReasoningStateSummarizer:
             ReasoningState with structured summary.
         """
         # Extract structured information
-        confirmed_facts, hypotheses, open_questions = self._extract_facts_from_messages(
-            messages
-        )
+        confirmed_facts, hypotheses, open_questions = self._extract_facts_from_messages(messages)
 
         # Get visited sources from evidence ledger
         evidence = self.masker.get_evidence_ledger()
@@ -207,10 +201,7 @@ class ReasoningStateSummarizer:
         self._summaries.append(state)
         self._last_summary_step = step_number
 
-        logger.info(
-            f"Created reasoning state summary at step {step_number}: "
-            f"{len(confirmed_facts)} facts, {len(hypotheses)} hypotheses"
-        )
+        logger.info(f"Created reasoning state summary at step {step_number}: {len(confirmed_facts)} facts, {len(hypotheses)} hypotheses")
 
         return state
 

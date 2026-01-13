@@ -24,12 +24,12 @@ logger = logging.getLogger(__name__)
 
 # Patterns for secret redaction
 SECRET_PATTERNS = [
-    (re.compile(r'(api[_-]?key|apikey)["\s:=]+["\']?([a-zA-Z0-9_\-]{20,})["\']?', re.I), r'\1="[REDACTED]"'),
-    (re.compile(r'(password|passwd|pwd)["\s:=]+["\']?([^\s"\']{8,})["\']?', re.I), r'\1="[REDACTED]"'),
-    (re.compile(r'(secret|token)["\s:=]+["\']?([a-zA-Z0-9_\-]{20,})["\']?', re.I), r'\1="[REDACTED]"'),
-    (re.compile(r'(bearer|authorization)["\s:]+["\']?([a-zA-Z0-9_\-\.]{20,})["\']?', re.I), r'\1="[REDACTED]"'),
-    (re.compile(r'(sk-[a-zA-Z0-9]{20,})', re.I), '[REDACTED_API_KEY]'),
-    (re.compile(r'(ghp_[a-zA-Z0-9]{36})', re.I), '[REDACTED_GITHUB_TOKEN]'),
+    (re.compile(r'(api[_-]?key|apikey)["\s:=]+["\']?([a-zA-Z0-9_\-]{20,})["\']?', re.IGNORECASE), r'\1="[REDACTED]"'),
+    (re.compile(r'(password|passwd|pwd)["\s:=]+["\']?([^\s"\']{8,})["\']?', re.IGNORECASE), r'\1="[REDACTED]"'),
+    (re.compile(r'(secret|token)["\s:=]+["\']?([a-zA-Z0-9_\-]{20,})["\']?', re.IGNORECASE), r'\1="[REDACTED]"'),
+    (re.compile(r'(bearer|authorization)["\s:]+["\']?([a-zA-Z0-9_\-\.]{20,})["\']?', re.IGNORECASE), r'\1="[REDACTED]"'),
+    (re.compile(r"(sk-[a-zA-Z0-9]{20,})", re.IGNORECASE), "[REDACTED_API_KEY]"),
+    (re.compile(r"(ghp_[a-zA-Z0-9]{36})", re.IGNORECASE), "[REDACTED_GITHUB_TOKEN]"),
 ]
 
 
@@ -247,9 +247,7 @@ class ArtifactStore:
                 continue
             if tags and not any(t in meta.tags for t in tags):
                 continue
-            if source_url_contains and (
-                not meta.source_url or source_url_contains not in meta.source_url
-            ):
+            if source_url_contains and (not meta.source_url or source_url_contains not in meta.source_url):
                 continue
             results.append(meta)
             if len(results) >= limit:
@@ -263,4 +261,3 @@ class ArtifactStore:
     def get_total_bytes(self) -> int:
         """Get the total bytes stored across all artifacts."""
         return sum(m.size_bytes for m in self._metadata_cache.values())
-

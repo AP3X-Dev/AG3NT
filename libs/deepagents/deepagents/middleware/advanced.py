@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -118,6 +117,7 @@ Returns expert guidance with reasoning."""
 
 # --- Tool Implementations ---
 
+
 async def _finder_search(
     query: str,
     backend: BackendProtocol,
@@ -166,8 +166,6 @@ async def _index_codebase(
         extensions: File extensions to index.
         max_files: Maximum files to index.
     """
-    import re
-
     logger.info("Indexing codebase for semantic search...")
 
     # Find files using glob
@@ -178,7 +176,7 @@ async def _index_codebase(
         return
 
     indexed = 0
-    for file_info in files[:max_files * 2]:  # Check more files to find enough matching extensions
+    for file_info in files[: max_files * 2]:  # Check more files to find enough matching extensions
         if indexed >= max_files:
             break
 
@@ -215,11 +213,53 @@ async def _keyword_grep_search(query: str, backend: BackendProtocol) -> str:
 
     words = re.findall(r"\b\w+\b", query.lower())
     stopwords = {
-        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "must", "shall", "can", "for", "and", "or",
-        "but", "in", "on", "at", "to", "from", "with", "by", "that", "this",
-        "it", "its", "of", "all", "find", "where", "how", "what", "when",
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "can",
+        "for",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "from",
+        "with",
+        "by",
+        "that",
+        "this",
+        "it",
+        "its",
+        "of",
+        "all",
+        "find",
+        "where",
+        "how",
+        "what",
+        "when",
     }
     keywords = [w for w in words if w not in stopwords and len(w) > 2]
 
@@ -240,12 +280,14 @@ async def _keyword_grep_search(query: str, backend: BackendProtocol) -> str:
                 file_path = match.get("path", "")
                 if file_path not in seen_files:
                     seen_files.add(file_path)
-                    results.append({
-                        "path": file_path,
-                        "line": match.get("line", 0),
-                        "text": match.get("text", ""),
-                        "keyword": keyword,
-                    })
+                    results.append(
+                        {
+                            "path": file_path,
+                            "line": match.get("line", 0),
+                            "text": match.get("text", ""),
+                            "keyword": keyword,
+                        }
+                    )
         except Exception as e:
             logger.warning(f"Finder grep failed for keyword '{keyword}': {e}")
 
@@ -375,11 +417,12 @@ async def _look_at_file(
     file_size = len(content)
 
     # Handle different file types
-    if suffix in ('.png', '.jpg', '.jpeg', '.gif', '.webp'):
+    if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
         # If we have a vision model, use it
         if model is not None:
             try:
                 from deepagents.vision import ainvoke_vision_model
+
                 return await ainvoke_vision_model(
                     model=model,
                     image_bytes=content,
@@ -402,7 +445,7 @@ Objective: {objective}
 Note: Vision model not configured. To enable image analysis, pass a vision-capable
 model (Claude 3+, GPT-4V, etc.) to AdvancedMiddleware(model=your_model)."""
 
-    elif suffix == '.pdf':
+    if suffix == ".pdf":
         # If we have a vision model, could render PDF pages and analyze
         # For now, return info about the PDF
         return f"""PDF file: {path}
@@ -416,10 +459,10 @@ Note: PDF analysis requires additional libraries. Install pypdf for text extract
 
 For visual PDF analysis, a document processing pipeline is needed."""
 
-    elif suffix == '.svg':
+    if suffix == ".svg":
         # SVG is XML-based, can be read as text
-        svg_text = content.decode('utf-8', errors='replace')
-        lines = svg_text.split('\n')[:20]
+        svg_text = content.decode("utf-8", errors="replace")
+        lines = svg_text.split("\n")[:20]
         return f"""SVG file: {path}
 Size: {file_size:,} bytes
 
@@ -430,11 +473,11 @@ First 20 lines of SVG content:
 
 Objective: {objective}"""
 
-    else:
-        return f"Unsupported file type: {suffix}. Supported: PNG, JPEG, GIF, WebP, SVG, PDF"
+    return f"Unsupported file type: {suffix}. Supported: PNG, JPEG, GIF, WebP, SVG, PDF"
 
 
 # --- Tool Generators ---
+
 
 def _finder_tool_generator(
     backend: BackendProtocol | Callable[[ToolRuntime], BackendProtocol],
@@ -464,10 +507,9 @@ def _finder_tool_generator(
 
     def sync_finder(query: str, runtime: ToolRuntime) -> str:
         import asyncio
+
         resolved_backend = _get_backend(runtime)
-        return asyncio.get_event_loop().run_until_complete(
-            _finder_search(query, resolved_backend, search_engine)
-        )
+        return asyncio.get_event_loop().run_until_complete(_finder_search(query, resolved_backend, search_engine))
 
     return StructuredTool.from_function(
         name="finder",
@@ -517,10 +559,9 @@ def _look_at_tool_generator(
         runtime: ToolRuntime = None,
     ) -> str:
         import asyncio
+
         resolved_backend = _get_backend(runtime)
-        return asyncio.get_event_loop().run_until_complete(
-            _look_at_file(path, objective, resolved_backend, context, referenceFiles, model=model)
-        )
+        return asyncio.get_event_loop().run_until_complete(_look_at_file(path, objective, resolved_backend, context, referenceFiles, model=model))
 
     return StructuredTool.from_function(
         name="look_at",
@@ -528,7 +569,6 @@ def _look_at_tool_generator(
         func=sync_look_at,
         coroutine=async_look_at,
     )
-
 
 
 # --- Subagent Definitions ---
@@ -675,21 +715,17 @@ class AdvancedMiddleware(AgentMiddleware):
 
         # Enable advanced tools with vision support
         from deepagents import get_default_model
+
         agent = create_agent(middleware=[AdvancedMiddleware(model=get_default_model())])
 
         # Enable semantic search with embeddings
-        agent = create_agent(middleware=[
-            AdvancedMiddleware(enable_semantic_search=True)
-        ])
+        agent = create_agent(middleware=[AdvancedMiddleware(enable_semantic_search=True)])
 
         # Also add librarian and oracle subagents
         agent = create_agent(
             middleware=[
                 AdvancedMiddleware(model=model),
-                SubAgentMiddleware(
-                    default_model="claude-sonnet-4-20250514",
-                    subagents=[get_librarian_subagent(), get_oracle_subagent()]
-                )
+                SubAgentMiddleware(default_model="claude-sonnet-4-20250514", subagents=[get_librarian_subagent(), get_oracle_subagent()]),
             ]
         )
         ```
@@ -753,11 +789,7 @@ class AdvancedMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or ADVANCED_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return handler(request)
@@ -771,12 +803,7 @@ class AdvancedMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or ADVANCED_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return await handler(request)
-

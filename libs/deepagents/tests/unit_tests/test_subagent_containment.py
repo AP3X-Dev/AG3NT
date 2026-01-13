@@ -1,6 +1,5 @@
 """Tests for Subagent Containment module."""
 
-import pytest
 
 from deepagents.subagent import (
     ContainedSubAgentMiddleware,
@@ -95,4 +94,3 @@ class TestContainedSubAgentMiddleware:
         )
         tool_names = [t.name for t in middleware.tools]
         assert "task" in tool_names
-

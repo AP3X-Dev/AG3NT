@@ -1,12 +1,13 @@
 """Tests for skills loader."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from deepagents.skills.config import SkillsConfig
-from deepagents.skills.registry import SkillRegistry
 from deepagents.skills.loader import SkillLoader
+from deepagents.skills.registry import SkillRegistry
 
 
 @pytest.fixture
@@ -17,7 +18,7 @@ def temp_skills_dir():
         skill_dir.mkdir()
 
         skill_md = skill_dir / "SKILL.md"
-        skill_md.write_text('''---
+        skill_md.write_text("""---
 id: test-skill
 name: Test Skill
 description: A test skill for unit testing
@@ -53,7 +54,7 @@ Plain text output.
 ## Failure Modes and Recovery
 
 If loading fails, check the SKILL.md format.
-''')
+""")
         yield tmpdir
 
 
@@ -150,4 +151,3 @@ class TestSkillLoader:
         block = skill.get_context_block()
         assert "Active Skill" in block
         assert "Test Skill" in block
-

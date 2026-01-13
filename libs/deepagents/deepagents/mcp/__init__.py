@@ -32,23 +32,23 @@ from deepagents.mcp.config import (
     FailBehavior,
     MCPConfig,
     MCPServerConfig,
-    TenantMode,
     ServerInstanceScope,
+    TenantMode,
 )
-from deepagents.mcp.naming import ToolNameRegistry, ToolNameInfo
-from deepagents.mcp.tenant import TenantResolver, RequestContext, ClientPool
+from deepagents.mcp.naming import ToolNameInfo, ToolNameRegistry
+from deepagents.mcp.tenant import ClientPool, RequestContext, TenantResolver
 
 __all__ = [
+    "ClientPool",
     "FailBehavior",
     "MCPConfig",
     "MCPServerConfig",
-    "TenantMode",
-    "ServerInstanceScope",
-    "ToolNameRegistry",
-    "ToolNameInfo",
-    "TenantResolver",
     "RequestContext",
-    "ClientPool",
+    "ServerInstanceScope",
+    "TenantMode",
+    "TenantResolver",
+    "ToolNameInfo",
+    "ToolNameRegistry",
 ]
 
 # Optional middleware (requires langchain-mcp-adapters)
@@ -59,12 +59,13 @@ try:
         ToolCallResult,
     )
 
-    __all__.extend([
-        "MCPMiddleware",
-        "ToolCallAuditInfo",
-        "ToolCallResult",
-    ])
+    __all__.extend(
+        [
+            "MCPMiddleware",
+            "ToolCallAuditInfo",
+            "ToolCallResult",
+        ]
+    )
 except ImportError:
     # MCP adapter dependencies not installed
     pass
-

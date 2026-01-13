@@ -62,7 +62,7 @@ class FilesystemBackend(BackendProtocol):
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
 
     def _resolve_path(self, key: str) -> Path:
-        """Resolve a file path with security checks.
+        r"""Resolve a file path with security checks.
 
         When virtual_mode=True, treat incoming paths as virtual absolute paths under
         self.cwd, disallow traversal (.., ~) and ensure resolved path stays within root.
@@ -93,9 +93,9 @@ class FilesystemBackend(BackendProtocol):
 
         # On Windows, Unix-style paths starting with / (but no drive letter) should be
         # treated as relative to cwd, not as C:\ paths
-        if os.name == 'nt' and key.startswith('/') and not re.match(r'^[a-zA-Z]:', key):
+        if os.name == "nt" and key.startswith("/") and not re.match(r"^[a-zA-Z]:", key):
             # Strip leading slash and resolve relative to cwd
-            return (self.cwd / key.lstrip('/')).resolve()
+            return (self.cwd / key.lstrip("/")).resolve()
 
         if path.is_absolute():
             return path

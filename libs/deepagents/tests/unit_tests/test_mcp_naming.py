@@ -113,4 +113,3 @@ class TestToolNameRegistry:
 
         assert registry.has_tool("math_add") is False
         assert len(registry.get_all_tools()) == 0
-

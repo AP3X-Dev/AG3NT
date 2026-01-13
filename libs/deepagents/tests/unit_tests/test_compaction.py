@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from deepagents.compaction import (
-    ArtifactMeta,
     ArtifactStore,
     AssembledContext,
     CompactionConfig,
@@ -23,7 +21,6 @@ from deepagents.compaction import (
     ResearchBundle,
     ResearchSubagentRunner,
     RetrievalIndex,
-    RetrievalResult,
 )
 from deepagents.compaction.models import Confidence
 
@@ -545,9 +542,7 @@ class TestResearchSubagentRunner:
                     evidence_artifact_ids=["art_1"],  # Link to evidence
                 )
             ],
-            evidence=[
-                EvidenceRecord(url="https://example.com", artifact_id="art_1")
-            ],
+            evidence=[EvidenceRecord(url="https://example.com", artifact_id="art_1")],
         )
 
         passed, issues = runner.review_bundle(bundle)
@@ -570,12 +565,8 @@ class TestResearchSubagentRunner:
         """Test formatting bundle for response."""
         bundle = ResearchBundle(
             executive_summary="Research summary",
-            findings=[
-                Finding(claim="Important finding", confidence=Confidence.HIGH)
-            ],
-            evidence=[
-                EvidenceRecord(url="https://example.com", artifact_id="art_1")
-            ],
+            findings=[Finding(claim="Important finding", confidence=Confidence.HIGH)],
+            evidence=[EvidenceRecord(url="https://example.com", artifact_id="art_1")],
         )
 
         formatted = runner.format_bundle_for_response(bundle)
@@ -583,4 +574,3 @@ class TestResearchSubagentRunner:
         assert "## Research Results" in formatted
         assert "Important finding" in formatted
         assert "Sources Consulted" in formatted
-

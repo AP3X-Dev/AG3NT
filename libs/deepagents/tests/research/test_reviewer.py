@@ -8,12 +8,10 @@ import pytest
 from deepagents.compaction.models import Confidence, EvidenceRecord, Finding, ResearchBundle
 from deepagents.research import (
     EvidenceLedger,
-    Gap,
     GapType,
     ResearchBrief,
     ResearchConfig,
     Reviewer,
-    ReviewResult,
     ReviewStatus,
 )
 
@@ -44,7 +42,7 @@ def reviewer(config):
 def ledger(temp_workspace, config):
     """Create an evidence ledger with some records."""
     ledger = EvidenceLedger(temp_workspace, config)
-    
+
     # Add some evidence from different domains
     ledger.add_record(
         url="https://example1.com/article",
@@ -61,13 +59,13 @@ def ledger(temp_workspace, config):
         artifact_id="art_3",
         title="Article 3",
     )
-    
+
     return ledger
 
 
 class TestReviewer:
     """Tests for Reviewer."""
-    
+
     def test_review_passing(self, reviewer, ledger):
         """Test review that passes all checks."""
         bundle = ResearchBundle(
@@ -89,14 +87,14 @@ class TestReviewer:
                 EvidenceRecord(url="https://example2.com", artifact_id="art_2"),
             ],
         )
-        
+
         brief = ResearchBrief(goal="Python programming")
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         assert result.status == ReviewStatus.PASSED
         assert result.source_diversity >= 1.0
-    
+
     def test_review_missing_output(self, reviewer, ledger):
         """Test review with missing required output."""
         bundle = ResearchBundle(
@@ -112,18 +110,18 @@ class TestReviewer:
                 EvidenceRecord(url="https://example1.com", artifact_id="art_1"),
             ],
         )
-        
+
         brief = ResearchBrief(
             goal="Python programming",
             required_outputs=["pricing_table", "installation_guide"],
         )
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         # Should have gaps for missing outputs
         missing_gaps = [g for g in result.gaps if g.gap_type == GapType.MISSING_OUTPUT]
         assert len(missing_gaps) >= 1
-    
+
     def test_review_low_diversity(self, reviewer, temp_workspace, config):
         """Test review with low source diversity."""
         # Create ledger with only one domain
@@ -136,21 +134,21 @@ class TestReviewer:
             url="https://example.com/page2",
             artifact_id="art_2",
         )
-        
+
         bundle = ResearchBundle(
             executive_summary="Research complete",
             findings=[],
             evidence=[],
         )
-        
+
         brief = ResearchBrief(goal="Test")
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         # Should have diversity gap
         diversity_gaps = [g for g in result.gaps if g.gap_type == GapType.DOMAIN_DIVERSITY]
         assert len(diversity_gaps) >= 1
-    
+
     def test_review_uncited_claims(self, reviewer, ledger):
         """Test review with uncited claims."""
         bundle = ResearchBundle(
@@ -164,15 +162,15 @@ class TestReviewer:
             ],
             evidence=[],
         )
-        
+
         brief = ResearchBrief(goal="Test")
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         # Should have uncited claim gap
         uncited_gaps = [g for g in result.gaps if g.gap_type == GapType.UNCITED_CLAIM]
         assert len(uncited_gaps) >= 1
-    
+
     def test_follow_up_generation(self, reviewer, ledger):
         """Test follow-up task generation."""
         bundle = ResearchBundle(
@@ -180,18 +178,18 @@ class TestReviewer:
             findings=[],
             evidence=[],
         )
-        
+
         brief = ResearchBrief(
             goal="AWS Lambda pricing",
             required_outputs=["pricing_table"],
         )
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         # Should generate follow-up for missing output
         assert len(result.follow_up_tasks) >= 1
         assert any("pricing_table" in t.goal.lower() for t in result.follow_up_tasks)
-    
+
     def test_confidence_distribution(self, reviewer, ledger):
         """Test confidence distribution calculation."""
         bundle = ResearchBundle(
@@ -204,12 +202,11 @@ class TestReviewer:
             ],
             evidence=[],
         )
-        
+
         brief = ResearchBrief(goal="Test")
-        
+
         result = reviewer.review(bundle, brief, ledger)
-        
+
         assert result.confidence_distribution["high"] == 2
         assert result.confidence_distribution["medium"] == 1
         assert result.confidence_distribution["low"] == 1
-

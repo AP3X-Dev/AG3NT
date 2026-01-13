@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from deepagents.middleware.filesystem import _validate_path, _supports_native_paths
+from deepagents.backends.composite import CompositeBackend
 from deepagents.backends.filesystem import FilesystemBackend
 from deepagents.backends.state import StateBackend
-from deepagents.backends.composite import CompositeBackend
+from deepagents.middleware.filesystem import _supports_native_paths, _validate_path
 
 
 class TestValidatePath:

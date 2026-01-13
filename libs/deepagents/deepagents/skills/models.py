@@ -5,7 +5,7 @@ All models use Pydantic for validation and serialization.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 def _utcnow() -> datetime:
     """Get current UTC time in a timezone-aware manner."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class SkillMode(str, Enum):
@@ -73,6 +73,7 @@ class SkillMeta(BaseModel):
     def validate_id(cls, v: str) -> str:
         """Validate skill ID format."""
         import re
+
         if not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", v):
             raise ValueError("ID must be lowercase alphanumeric with hyphens")
         if len(v) > 64:
@@ -84,6 +85,7 @@ class SkillMeta(BaseModel):
     def validate_version(cls, v: str) -> str:
         """Validate semantic version format."""
         import re
+
         if not re.match(r"^\d+\.\d+\.\d+(-[\w.]+)?(\+[\w.]+)?$", v):
             raise ValueError("Version must be semver format (e.g., 1.0.0)")
         return v
@@ -227,4 +229,3 @@ class SkillUsageRecord(BaseModel):
     blocked_tools: list[str] = Field(default_factory=list, description="Tools blocked by policy")
     duration_ms: int | None = Field(None, description="Duration in milliseconds")
     error: str | None = Field(None, description="Error message if failed")
-

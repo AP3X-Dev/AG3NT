@@ -98,10 +98,15 @@ ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = [
+    "ANN001",  # Missing type annotation for function argument
+    "ANN201",  # Missing return type annotation
     "D1",      # Skip documentation rules in tests
+    "FBT003",  # Boolean positional value in function call
+    "PLR2004", # Magic value used in comparison
+    "PTH123",  # `open()` should be replaced by `Path.open()`
     "S101",    # Allow asserts in tests
     "S311",    # Allow pseudo-random generators in tests
-    # Add more test-specific ignores
+    "F841",    # Local variable assigned but never used
 ]
 
 "deepagents/backends/composite.py" = ["B007", "BLE001", "D102", "EM101", "FBT001", "FBT002", "PLW2901", "S110"]

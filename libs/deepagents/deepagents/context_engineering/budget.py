@@ -46,7 +46,7 @@ class TokenBudgetTracker:
     3. Summarization trigger detection
     """
 
-    def __init__(self, config: "ContextEngineeringConfig") -> None:
+    def __init__(self, config: ContextEngineeringConfig) -> None:
         self.config = config
         self._component_tokens: dict[str, int] = {}
         self._step_count: int = 0
@@ -102,4 +102,3 @@ class TokenBudgetTracker:
     def step_count(self) -> int:
         """Get current step count."""
         return self._step_count
-

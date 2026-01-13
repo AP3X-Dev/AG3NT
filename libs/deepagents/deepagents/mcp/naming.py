@@ -147,4 +147,3 @@ class ToolNameRegistry:
             True if the tool is registered.
         """
         return name in self._tools
-

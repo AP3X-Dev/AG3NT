@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RunMetrics:
     """Metrics for a single test run."""
-    
+
     fixture_name: str
     passed: bool
     duration_ms: float
@@ -43,7 +43,7 @@ class RunMetrics:
 @dataclass
 class AggregateMetrics:
     """Aggregated metrics across multiple test runs."""
-    
+
     total_tests: int = 0
     passed_tests: int = 0
     failed_tests: int = 0
@@ -85,7 +85,7 @@ class AggregateMetrics:
 
 class MetricsCollector:
     """Collects and aggregates test metrics.
-    
+
     Provides:
     - Per-test metrics recording
     - Aggregate statistics
@@ -95,7 +95,7 @@ class MetricsCollector:
 
     def __init__(self, output_dir: Path | None = None) -> None:
         """Initialize collector.
-        
+
         Args:
             output_dir: Directory for metrics output files.
         """
@@ -132,23 +132,22 @@ class MetricsCollector:
         """Save metrics to file."""
         if not self.output_dir:
             return None
-        
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / filename
-        
+
         data = {
             "run_timestamp": datetime.now().isoformat(),
             "aggregate": self.get_aggregate().to_dict(),
             "tests": [m.to_dict() for m in self._metrics],
         }
-        
+
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
-        
+
         logger.info(f"Saved metrics to {path}")
         return path
 
     def get_failed_tests(self) -> list[RunMetrics]:
         """Get list of failed tests."""
         return [m for m in self._metrics if not m.passed]
-

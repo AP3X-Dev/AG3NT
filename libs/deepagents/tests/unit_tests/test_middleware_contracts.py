@@ -7,54 +7,53 @@ from deepagents.middleware.contracts import (
     MiddlewareContract,
     MiddlewarePhase,
     PromptBudget,
-    ValidationResult,
     validate_middleware_stack,
 )
 
 
 class MockMiddleware:
     """Mock middleware for testing."""
-    pass
+
 
 
 class MemoryMiddleware(MockMiddleware):
     """Mock MemoryMiddleware."""
-    pass
+
 
 
 class SkillsMiddleware(MockMiddleware):
     """Mock SkillsMiddleware."""
-    pass
+
 
 
 class FilesystemMiddleware(MockMiddleware):
     """Mock FilesystemMiddleware."""
-    pass
+
 
 
 class SubAgentMiddleware(MockMiddleware):
     """Mock SubAgentMiddleware."""
-    pass
+
 
 
 class CompactionMiddleware(MockMiddleware):
     """Mock CompactionMiddleware."""
-    pass
+
 
 
 class SummarizationMiddleware(MockMiddleware):
     """Mock SummarizationMiddleware."""
-    pass
+
 
 
 class HumanInTheLoopMiddleware(MockMiddleware):
     """Mock HumanInTheLoopMiddleware."""
-    pass
+
 
 
 class UnknownMiddleware(MockMiddleware):
     """Unknown middleware not in registry."""
-    pass
+
 
 
 class TestMiddlewarePhase:
@@ -134,10 +133,7 @@ class TestMiddlewareRegistry:
                     if name in other_conflicts or other_name in conflicts:
                         continue
 
-                    pytest.fail(
-                        f"Tool '{tool}' registered by both "
-                        f"'{other_name}' and '{name}'"
-                    )
+                    pytest.fail(f"Tool '{tool}' registered by both '{other_name}' and '{name}'")
                 all_tools[tool] = name
 
 
@@ -204,4 +200,3 @@ class TestValidateMiddlewareStack:
         ]
         result = validate_middleware_stack(stack, max_prompt_budget=1000)
         assert any("exceeds" in w for w in result.warnings)
-

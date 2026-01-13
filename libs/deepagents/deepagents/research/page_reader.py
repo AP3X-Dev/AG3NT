@@ -15,7 +15,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
 
 from deepagents.research.config import ResearchConfig
 
@@ -25,21 +24,21 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PageContent:
     """Extracted content from a web page."""
-    
+
     url: str
     title: str | None
     content: str  # Markdown content
     raw_html: str | None = None
-    
+
     # Metadata
     author: str | None = None
     publish_date: datetime | None = None
     description: str | None = None
-    
+
     # Extraction info
     word_count: int = 0
     extraction_method: str = "unknown"
-    
+
     # Flags
     needs_browser: bool = False
     error: str | None = None
@@ -47,11 +46,11 @@ class PageContent:
 
 class PageReader:
     """Reads and extracts content from web pages.
-    
+
     The PageReader uses HTTP requests to fetch pages and extracts
     the main content using readability-style algorithms. It detects
     when JavaScript rendering is required and signals for browser mode.
-    
+
     Args:
         config: Research configuration.
         use_mock: If True, use mock session for testing.
@@ -70,15 +69,14 @@ class PageReader:
             else:
                 try:
                     import aiohttp
-                    timeout = aiohttp.ClientTimeout(
-                        total=self.config.page_fetch_timeout_seconds
-                    )
+
+                    timeout = aiohttp.ClientTimeout(total=self.config.page_fetch_timeout_seconds)
                     self._session = aiohttp.ClientSession(timeout=timeout)
                 except ImportError:
                     logger.warning("aiohttp not available, using mock session")
                     self._session = MockSession()
         return self._session
-    
+
     async def close(self) -> None:
         """Close the HTTP session."""
         if self._session is not None:
@@ -87,14 +85,14 @@ class PageReader:
             except Exception:
                 pass
             self._session = None
-    
+
     def _extract_title(self, html: str) -> str | None:
         """Extract title from HTML."""
         # Try <title> tag
         match = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
         if match:
             return match.group(1).strip()
-        
+
         # Try og:title
         match = re.search(
             r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
@@ -103,9 +101,9 @@ class PageReader:
         )
         if match:
             return match.group(1).strip()
-        
+
         return None
-    
+
     def _extract_description(self, html: str) -> str | None:
         """Extract description from HTML."""
         # Try meta description
@@ -116,7 +114,7 @@ class PageReader:
         )
         if match:
             return match.group(1).strip()
-        
+
         # Try og:description
         match = re.search(
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)["\']',
@@ -125,21 +123,21 @@ class PageReader:
         )
         if match:
             return match.group(1).strip()
-        
+
         return None
-    
+
     def _extract_publish_date(self, html: str) -> datetime | None:
         """Extract publish date from HTML."""
         if not self.config.extract_publish_dates:
             return None
-        
+
         # Try common date meta tags
         patterns = [
             r'<meta[^>]+property=["\']article:published_time["\'][^>]+content=["\']([^"\']+)["\']',
             r'<meta[^>]+name=["\']date["\'][^>]+content=["\']([^"\']+)["\']',
             r'<time[^>]+datetime=["\']([^"\']+)["\']',
         ]
-        
+
         for pattern in patterns:
             match = re.search(pattern, html, re.IGNORECASE)
             if match:
@@ -150,14 +148,14 @@ class PageReader:
                         return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                 except Exception:
                     pass
-        
+
         return None
-    
+
     def _extract_author(self, html: str) -> str | None:
         """Extract author from HTML."""
         if not self.config.extract_author_info:
             return None
-        
+
         # Try meta author
         match = re.search(
             r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)["\']',
@@ -310,7 +308,7 @@ class PageReader:
 
         # Truncate if needed
         if len(content) > self.config.max_content_chars_per_source:
-            content = content[:self.config.max_content_chars_per_source] + "\n\n[Content truncated]"
+            content = content[: self.config.max_content_chars_per_source] + "\n\n[Content truncated]"
 
         # Check if browser is needed
         needs_browser = self._detect_needs_browser(html, content)
@@ -335,7 +333,7 @@ class PageReader:
 class MockSession:
     """Mock HTTP session for testing."""
 
-    def get(self, url: str, **kwargs: Any) -> "MockResponse":
+    def get(self, url: str, **kwargs: Any) -> MockResponse:
         """Return a MockResponse that can be used as an async context manager."""
         return MockResponse(url)
 
@@ -365,8 +363,8 @@ class MockResponse:
         </html>
         """
 
-    async def __aenter__(self) -> "MockResponse":
+    async def __aenter__(self) -> MockResponse:
         return self
 
-    async def __aexit__(self, *args: Any) -> None:
+    async def __aexit__(self, *args: object) -> None:
         pass

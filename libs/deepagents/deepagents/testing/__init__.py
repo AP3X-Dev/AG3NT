@@ -25,7 +25,6 @@ __all__ = [
     "AgentFixture",
     "FixtureResult",
     "MetricsCollector",
-    "RunMetrics",
     "RegressionRunner",
+    "RunMetrics",
 ]
-

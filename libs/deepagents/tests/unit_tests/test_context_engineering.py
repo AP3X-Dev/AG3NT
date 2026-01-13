@@ -1,18 +1,15 @@
 """Tests for Context Engineering module."""
 
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from deepagents.context_engineering import (
+    CacheStats,
     ContextEngineeringConfig,
     ContextEngineeringMiddleware,
-    TokenBudgetTracker,
     PromptAssemblyCache,
-    CacheStats,
+    TokenBudgetTracker,
 )
-from deepagents.context_engineering.budget import TokenBudgetReport
 
 
 class TestContextEngineeringConfig:
@@ -123,7 +120,7 @@ class TestContextEngineeringMiddleware:
         assert len(middleware.tools) == 2  # read_artifact, search_artifacts
 
         # Close the retrieval index to release file handles
-        if hasattr(middleware, 'retrieval_index'):
+        if hasattr(middleware, "retrieval_index"):
             middleware.retrieval_index.close()
 
     def test_tool_names(self, workspace_dir):
@@ -135,7 +132,7 @@ class TestContextEngineeringMiddleware:
         assert "read_artifact" in tool_names
         assert "search_artifacts" in tool_names
 
-        if hasattr(middleware, 'retrieval_index'):
+        if hasattr(middleware, "retrieval_index"):
             middleware.retrieval_index.close()
 
     def test_get_budget_report(self, workspace_dir):
@@ -148,10 +145,8 @@ class TestContextEngineeringMiddleware:
         assert "used_tokens" in report
         assert "step_count" in report
 
-        if hasattr(middleware, 'retrieval_index'):
+        if hasattr(middleware, "retrieval_index"):
             middleware.retrieval_index.close()
-
-
 
 
 class TestPromptAssemblyCache:

@@ -1,17 +1,14 @@
 """Tests for Testing Harness module."""
 
 import json
-from datetime import datetime
-from pathlib import Path
 
 import pytest
 
 from deepagents.testing import (
     AgentFixture,
-    FixtureResult,
     MetricsCollector,
-    RunMetrics,
     RegressionRunner,
+    RunMetrics,
 )
 from deepagents.testing.fixtures import FixtureMessage
 from deepagents.testing.runner import RunConfig
@@ -98,14 +95,16 @@ class TestMetricsCollector:
         collector = MetricsCollector()
         collector.start_run()
 
-        collector.record(RunMetrics(
-            fixture_name="test1",
-            passed=True,
-            duration_ms=100,
-            token_count=500,
-            tool_calls=2,
-            steps=3,
-        ))
+        collector.record(
+            RunMetrics(
+                fixture_name="test1",
+                passed=True,
+                duration_ms=100,
+                token_count=500,
+                tool_calls=2,
+                steps=3,
+            )
+        )
 
         agg = collector.get_aggregate()
         assert agg.total_tests == 1
@@ -119,7 +118,7 @@ class TestMetricsCollector:
         collector.record(RunMetrics("t1", True, 100, 500, 2, 3))
         collector.record(RunMetrics("t2", False, 200, 600, 3, 4, error="Failed"))
         collector.record(RunMetrics("t3", True, 150, 400, 1, 2))
-        
+
         agg = collector.get_aggregate()
         assert agg.total_tests == 3
         assert agg.passed_tests == 2
@@ -131,11 +130,11 @@ class TestMetricsCollector:
         collector = MetricsCollector(output_dir=tmp_path)
         collector.start_run()
         collector.record(RunMetrics("t1", True, 100, 500, 2, 3))
-        
+
         path = collector.save()
         assert path is not None
         assert path.exists()
-        
+
         with open(path) as f:
             data = json.load(f)
         assert "aggregate" in data
@@ -150,13 +149,13 @@ class TestRegressionRunner:
         # Create test fixtures
         fixture1 = AgentFixture("test1", "Test 1", [])
         fixture2 = AgentFixture("test2", "Test 2", [], tags=["smoke"])
-        
+
         fixture1.save(tmp_path / "test1.json")
         fixture2.save(tmp_path / "test2.json")
-        
+
         config = RunConfig(fixtures_dir=tmp_path)
         runner = RegressionRunner(config)
-        
+
         fixtures = runner.load_fixtures()
         assert len(fixtures) == 2
 
@@ -164,10 +163,10 @@ class TestRegressionRunner:
         """Test running all fixtures with passing results."""
         fixture = AgentFixture("test1", "Test 1", [], expected_output="OK")
         fixture.save(tmp_path / "test1.json")
-        
+
         config = RunConfig(fixtures_dir=tmp_path)
         runner = RegressionRunner(config)
-        
+
         result = runner.run_all()
         assert result.total == 1
         assert result.passed == 1
@@ -177,11 +176,10 @@ class TestRegressionRunner:
         """Test filtering fixtures by tag."""
         AgentFixture("t1", "Test 1", [], tags=["smoke"]).save(tmp_path / "t1.json")
         AgentFixture("t2", "Test 2", [], tags=["full"]).save(tmp_path / "t2.json")
-        
+
         config = RunConfig(fixtures_dir=tmp_path, tags_filter=["smoke"])
         runner = RegressionRunner(config)
-        
+
         fixtures = runner.load_fixtures()
         assert len(fixtures) == 1
         assert fixtures[0].name == "t1"
-

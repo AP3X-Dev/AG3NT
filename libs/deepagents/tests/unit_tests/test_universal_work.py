@@ -6,8 +6,6 @@ Tests backward compatibility with TodoListMiddleware and new functionality.
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from deepagents.middleware.universal_work import (
     ActivityType,
     AgentActivity,
@@ -47,10 +45,10 @@ class TestWorkItemModel:
         """Test WorkItem status values."""
         item = WorkItem(title="Test")
         assert item.status == WorkItemStatus.INBOX
-        
+
         item.status = WorkItemStatus.ACCEPTED
         assert item.status == WorkItemStatus.ACCEPTED
-        
+
         item.status = WorkItemStatus.IN_PROGRESS
         assert item.status == WorkItemStatus.IN_PROGRESS
 
@@ -77,7 +75,7 @@ class TestPlanStepModel:
             "activeForm": "Working on it",
         }
         step = PlanStep.from_todo_dict(todo, "work-item-123", position=1)
-        
+
         assert step.content == "Do something"
         assert step.status == PlanStepStatus.IN_PROGRESS
         assert step.active_form == "Working on it"
@@ -94,7 +92,7 @@ class TestPlanStepModel:
             position=0,
         )
         todo = step.to_todo_dict()
-        
+
         assert todo["content"] == "Test task"
         assert todo["status"] == "completed"
         assert todo["activeForm"] == "Done"
@@ -107,7 +105,7 @@ class TestFileBackendStorage:
         """Test storage creates directory and files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = FileBackendStorage(tmpdir)
-            
+
             assert (Path(tmpdir) / "work_items.json").exists()
             assert (Path(tmpdir) / "plan_steps.json").exists()
             assert (Path(tmpdir) / "context.json").exists()
@@ -116,22 +114,22 @@ class TestFileBackendStorage:
         """Test WorkItem CRUD operations."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = FileBackendStorage(tmpdir)
-            
+
             # Create
             item = WorkItem(title="Test Item", body="Test body")
             created = storage.create_work_item(item)
             assert created.id == item.id
-            
+
             # Read
             retrieved = storage.get_work_item(item.id)
             assert retrieved is not None
             assert retrieved.title == "Test Item"
-            
+
             # Update
             retrieved.status = WorkItemStatus.IN_PROGRESS
             updated = storage.update_work_item(retrieved)
             assert updated.status == WorkItemStatus.IN_PROGRESS
-            
+
             # List
             items = storage.list_work_items()
             assert len(items) == 1
@@ -141,18 +139,18 @@ class TestFileBackendStorage:
         """Test PlanStep operations."""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = FileBackendStorage(tmpdir)
-            
+
             # Create work item first
             item = WorkItem(title="Test")
             storage.create_work_item(item)
-            
+
             # Create plan steps
             steps = [
                 PlanStep(work_item_id=item.id, content="Step 1", position=0),
                 PlanStep(work_item_id=item.id, content="Step 2", position=1),
             ]
             storage.replace_plan_steps(item.id, steps)
-            
+
             # Retrieve
             retrieved = storage.get_plan_steps(item.id)
             assert len(retrieved) == 2
@@ -366,4 +364,3 @@ class TestUniversalWorkMiddleware:
             assert "write_todos" in tool_names
             assert "read_todos" in tool_names
             assert "work_item_create" not in tool_names
-

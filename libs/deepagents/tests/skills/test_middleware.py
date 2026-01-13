@@ -1,12 +1,12 @@
 """Tests for skills middleware."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from deepagents.skills.config import SkillsConfig
 from deepagents.skills.middleware import SkillsToolkitMiddleware
-from deepagents.skills.models import SkillMode
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def temp_skills_dir():
         # Create prompt-only skill
         prompt_dir = Path(tmpdir) / "prompt-skill"
         prompt_dir.mkdir()
-        (prompt_dir / "SKILL.md").write_text('''---
+        (prompt_dir / "SKILL.md").write_text("""---
 id: prompt-skill
 name: Prompt Skill
 description: A prompt-only skill
@@ -45,12 +45,12 @@ Text.
 
 ## Failure Modes and Recovery
 Handle errors.
-''')
+""")
 
         # Create subagent-only skill
         subagent_dir = Path(tmpdir) / "subagent-skill"
         subagent_dir.mkdir()
-        (subagent_dir / "SKILL.md").write_text('''---
+        (subagent_dir / "SKILL.md").write_text("""---
 id: subagent-skill
 name: Subagent Skill
 description: A subagent-only skill
@@ -79,7 +79,7 @@ JSON.
 
 ## Failure Modes and Recovery
 Handle errors.
-''')
+""")
         yield tmpdir
 
 
@@ -161,4 +161,3 @@ class TestSkillsToolkitMiddleware:
         # Check disallowed tool
         allowed, reason = middleware.check_tool_allowed("delete")
         assert allowed is False
-

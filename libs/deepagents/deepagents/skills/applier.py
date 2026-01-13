@@ -7,7 +7,6 @@ enabling the skill to guide the agent's behavior.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
 from deepagents.skills.models import Skill, SkillMode, SkillUsageRecord
@@ -33,9 +32,9 @@ class SkillApplier:
 
     def __init__(
         self,
-        config: "SkillsConfig",
-        loader: "SkillLoader",
-        ledger: "SkillUsageLedger",
+        config: SkillsConfig,
+        loader: SkillLoader,
+        ledger: SkillUsageLedger,
     ):
         """Initialize the applier.
 
@@ -162,4 +161,3 @@ class SkillApplier:
         count = len(self._active_skills)
         self._active_skills.clear()
         return count
-

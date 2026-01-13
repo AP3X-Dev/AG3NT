@@ -11,7 +11,7 @@ The ResearchOrchestrator is responsible for:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from deepagents.compaction.models import (
@@ -26,7 +26,6 @@ from deepagents.research.models import (
     ResearchBrief,
     ResearchMode,
     SourceQueueItem,
-    SourceReasonCode,
     SourceStatus,
 )
 
@@ -37,23 +36,23 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class StopCondition:
     """Represents a stop condition for research."""
-    
+
     def __init__(self, reason: str, details: str = ""):
         self.reason = reason
         self.details = details
-    
+
     def __str__(self) -> str:
         return f"{self.reason}: {self.details}" if self.details else self.reason
 
 
 class ResearchOrchestrator:
     """Orchestrator for research sessions.
-    
+
     The orchestrator coordinates the entire research workflow:
     1. Parse and validate the research brief
     2. Generate search queries via source collector
@@ -61,12 +60,12 @@ class ResearchOrchestrator:
     4. Extract findings and build evidence links
     5. Review quality and trigger follow-ups if needed
     6. Produce final ResearchBundle
-    
+
     Args:
         session: The ResearchSession to operate on.
         config: Optional research config override.
     """
-    
+
     def __init__(
         self,
         session: ResearchSession,
@@ -74,14 +73,14 @@ class ResearchOrchestrator:
     ) -> None:
         self.session = session
         self.config = config or session.config
-        
+
         # Lazy imports to avoid circular dependencies
         self._source_collector = None
         self._page_reader = None
         self._browser_operator = None
         self._distiller = None
         self._reviewer = None
-    
+
     def create_brief(
         self,
         goal: str,
@@ -93,7 +92,7 @@ class ResearchOrchestrator:
         max_steps: int | None = None,
     ) -> ResearchBrief:
         """Create a ResearchBrief from a goal.
-        
+
         Args:
             goal: The research goal or question.
             constraints: Optional constraints dict.
@@ -101,7 +100,7 @@ class ResearchOrchestrator:
             mode_preference: Browser mode preference.
             max_sources: Override for max sources.
             max_steps: Override for max steps.
-            
+
         Returns:
             A configured ResearchBrief.
         """
@@ -114,52 +113,40 @@ class ResearchOrchestrator:
             max_steps=max_steps or self.config.max_steps,
             bundle_token_budget=self.config.bundle_token_budget,
         )
-        
+
         # Apply recency constraint if provided
         if constraints and "recency" in constraints:
             recency = constraints["recency"]
             if isinstance(recency, str) and recency.startswith("last_"):
                 days = int(recency.split("_")[1].replace("days", ""))
                 brief.recency_days = days
-        
+
         return brief
-    
+
     def check_stop_conditions(self) -> StopCondition | None:
         """Check if any stop conditions are met.
-        
+
         Returns:
             StopCondition if should stop, None otherwise.
         """
         brief = self.session.get_brief()
         if not brief:
             return StopCondition("no_brief", "No research brief set")
-        
+
         # Check step limit
         if self.session.current_step >= brief.max_steps:
-            return StopCondition(
-                "step_limit",
-                f"Reached max steps: {brief.max_steps}"
-            )
-        
+            return StopCondition("step_limit", f"Reached max steps: {brief.max_steps}")
+
         # Check source limit
-        processed = len([
-            s for s in self.session.get_source_queue()
-            if s.status in (SourceStatus.READ, SourceStatus.BROWSED)
-        ])
+        processed = len([s for s in self.session.get_source_queue() if s.status in (SourceStatus.READ, SourceStatus.BROWSED)])
         if processed >= brief.max_sources:
-            return StopCondition(
-                "source_limit",
-                f"Processed max sources: {brief.max_sources}"
-            )
-        
+            return StopCondition("source_limit", f"Processed max sources: {brief.max_sources}")
+
         # Check if all sources are processed
         pending = self.session.get_pending_sources()
         if not pending and processed > 0:
-            return StopCondition(
-                "queue_empty",
-                "All sources processed"
-            )
-        
+            return StopCondition("queue_empty", "All sources processed")
+
         return None
 
     def decide_mode(self, source: SourceQueueItem) -> ResearchMode:
@@ -224,7 +211,7 @@ class ResearchOrchestrator:
             hypotheses=[],
             open_questions=open_questions,
             visited_sources=[ev.url for ev in evidence],
-            next_actions=[f"Process next source" for _ in range(min(3, pending_count))],
+            next_actions=["Process next source" for _ in range(min(3, pending_count))],
             step_number=self.session.current_step,
         )
 
@@ -289,19 +276,23 @@ class ResearchOrchestrator:
         for ev in evidence:
             # Create a finding from notes and quotes
             if ev.notes:
-                findings.append(Finding(
-                    claim=ev.notes[:300],
-                    confidence=Confidence.MEDIUM,
-                    evidence_artifact_ids=[ev.artifact_id],
-                ))
+                findings.append(
+                    Finding(
+                        claim=ev.notes[:300],
+                        confidence=Confidence.MEDIUM,
+                        evidence_artifact_ids=[ev.artifact_id],
+                    )
+                )
 
             for quote in ev.quotes[:2]:
                 if len(quote) > 30:
-                    findings.append(Finding(
-                        claim=f'According to source: "{quote[:200]}"',
-                        confidence=Confidence.HIGH,
-                        evidence_artifact_ids=[ev.artifact_id],
-                    ))
+                    findings.append(
+                        Finding(
+                            claim=f'According to source: "{quote[:200]}"',
+                            confidence=Confidence.HIGH,
+                            evidence_artifact_ids=[ev.artifact_id],
+                        )
+                    )
 
         return findings[:20]  # Limit findings
 

@@ -21,9 +21,7 @@ Example:
         }
     )
 
-    agent = create_deep_agent(
-        middleware=[MCPMiddleware(config=config)]
-    )
+    agent = create_deep_agent(middleware=[MCPMiddleware(config=config)])
     ```
 """
 
@@ -34,7 +32,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -45,9 +43,6 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 from deepagents.mcp.config import FailBehavior, MCPConfig, MCPServerConfig
 from deepagents.mcp.naming import ToolNameRegistry
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -147,10 +142,7 @@ class MCPMiddleware(AgentMiddleware):
     ) -> None:
         """Initialize MCP middleware."""
         if not _check_mcp_available():
-            msg = (
-                "MCP dependencies not installed. "
-                "Install with: pip install deepagents[mcp]"
-            )
+            msg = "MCP dependencies not installed. Install with: pip install deepagents[mcp]"
             raise ImportError(msg)
 
         self.config = config
@@ -182,9 +174,7 @@ class MCPMiddleware(AgentMiddleware):
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # We're in an async context, can't block
-                    logger.warning(
-                        "MCP tools not loaded yet - call load_tools_async() first in async context"
-                    )
+                    logger.warning("MCP tools not loaded yet - call load_tools_async() first in async context")
                 else:
                     loop.run_until_complete(self.load_tools_async())
             except RuntimeError:
@@ -283,8 +273,7 @@ class MCPMiddleware(AgentMiddleware):
         if fail_behavior == FailBehavior.FAIL_CLOSED:
             logger.error(error_msg)
             raise RuntimeError(error_msg) from error
-        else:
-            logger.warning(error_msg)
+        logger.warning(error_msg)
 
     def _wrap_tool(self, tool: BaseTool) -> BaseTool | None:
         """Wrap an MCP tool with naming and audit hooks.
@@ -519,6 +508,7 @@ class MCPMiddleware(AgentMiddleware):
                         content = content_bytes.decode("utf-8")
                     except UnicodeDecodeError:
                         import base64
+
                         content = f"[Binary content, base64 encoded]\n{base64.b64encode(content_bytes).decode('ascii')}"
 
                     return f"Resource: {uri}\nMIME type: {blob.mimetype}\n\n{content}"
@@ -613,4 +603,3 @@ class MCPMiddleware(AgentMiddleware):
                 description=f"Get a prompt template from the {server_name} MCP server. Prompts are reusable templates that can be customized with arguments.",
             )
         ]
-

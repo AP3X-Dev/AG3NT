@@ -102,7 +102,7 @@ class ContextAssembler:
         if last_newline > target_chars * 0.7:
             truncated = truncated[:last_newline]
         elif last_period > target_chars * 0.7:
-            truncated = truncated[:last_period + 1]
+            truncated = truncated[: last_period + 1]
 
         truncated += "\n[... truncated ...]"
         return truncated, True
@@ -200,15 +200,11 @@ class ContextAssembler:
         if reasoning_states:
             latest = reasoning_states[-1]
             reasoning_content = self._format_reasoning_state(latest)
-            block_specs.append(
-                ("reasoning_state", reasoning_content, self.config.reasoning_state_token_budget)
-            )
+            block_specs.append(("reasoning_state", reasoning_content, self.config.reasoning_state_token_budget))
 
         # Add recent observations
         if recent_observations:
-            block_specs.append(
-                ("recent_observations", recent_observations, self.config.recent_observations_token_budget)
-            )
+            block_specs.append(("recent_observations", recent_observations, self.config.recent_observations_token_budget))
 
         # Add placeholders
         if placeholders:
@@ -220,9 +216,7 @@ class ContextAssembler:
         # Add retrieved snippets
         if retrieved_snippets:
             snippets_content = self._format_retrieved_snippets(retrieved_snippets)
-            block_specs.append(
-                ("retrieved_snippets", snippets_content, self.config.compressed_snippets_token_budget)
-            )
+            block_specs.append(("retrieved_snippets", snippets_content, self.config.compressed_snippets_token_budget))
 
         # Process blocks in priority order
         for name, content, budget in block_specs:
@@ -244,13 +238,15 @@ class ContextAssembler:
             remaining_budget -= token_estimate
             budget_used[name] = token_estimate
 
-            blocks.append(ContextBlock(
-                name=name.replace("_", " ").title(),
-                content=truncated_content,
-                priority=priority,
-                token_estimate=token_estimate,
-                source=name,
-            ))
+            blocks.append(
+                ContextBlock(
+                    name=name.replace("_", " ").title(),
+                    content=truncated_content,
+                    priority=priority,
+                    token_estimate=token_estimate,
+                    source=name,
+                )
+            )
 
         total_tokens = sum(b.token_estimate for b in blocks)
 

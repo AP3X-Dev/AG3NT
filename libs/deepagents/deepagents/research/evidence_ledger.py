@@ -22,16 +22,16 @@ logger = logging.getLogger(__name__)
 
 class EvidenceLedger:
     """Persistent storage for evidence records.
-    
+
     The EvidenceLedger stores all evidence gathered during research,
     providing the source of truth for citations. Records are persisted
     to a JSONL file and loaded on initialization.
-    
+
     Args:
         session_dir: Directory for the research session.
         config: Research configuration (optional).
     """
-    
+
     def __init__(
         self,
         session_dir: Path,
@@ -42,7 +42,7 @@ class EvidenceLedger:
         self._ledger_path = session_dir / "evidence_ledger.jsonl"
         self._records: dict[str, EvidenceRecord] = {}
         self._load()
-    
+
     def _load(self) -> None:
         """Load existing records from the ledger file."""
         if self._ledger_path.exists():
@@ -56,13 +56,13 @@ class EvidenceLedger:
                             self._records[record.artifact_id] = record
                         except Exception as e:
                             logger.warning(f"Failed to parse evidence record: {e}")
-    
+
     def _append(self, record: EvidenceRecord) -> None:
         """Append a record to the ledger file."""
         with open(self._ledger_path, "a", encoding="utf-8") as f:
             f.write(record.model_dump_json() + "\n")
         self._records[record.artifact_id] = record
-    
+
     def add_record(
         self,
         *,
@@ -74,7 +74,7 @@ class EvidenceLedger:
         quotes: list[str] | None = None,
     ) -> EvidenceRecord:
         """Add a new evidence record.
-        
+
         Args:
             url: URL of the source.
             artifact_id: ID of the stored artifact.
@@ -82,7 +82,7 @@ class EvidenceLedger:
             publish_date: Publication date if known.
             notes: Short notes about the source.
             quotes: Key quotes extracted from the source.
-            
+
         Returns:
             The created EvidenceRecord.
         """
@@ -97,18 +97,18 @@ class EvidenceLedger:
         self._append(record)
         logger.debug(f"Added evidence record: {url} -> {artifact_id}")
         return record
-    
+
     def get_by_artifact_id(self, artifact_id: str) -> EvidenceRecord | None:
         """Get a record by artifact ID."""
         return self._records.get(artifact_id)
-    
+
     def get_by_url(self, url: str) -> EvidenceRecord | None:
         """Get a record by URL."""
         for record in self._records.values():
             if record.url == url:
                 return record
         return None
-    
+
     def list_records(
         self,
         *,
@@ -117,12 +117,12 @@ class EvidenceLedger:
         limit: int = 100,
     ) -> list[EvidenceRecord]:
         """List evidence records with optional filters.
-        
+
         Args:
             domain_contains: Filter by domain substring.
             has_publish_date: Filter by presence of publish date.
             limit: Maximum number of records to return.
-            
+
         Returns:
             List of matching EvidenceRecord objects.
         """
@@ -138,18 +138,19 @@ class EvidenceLedger:
             if len(results) >= limit:
                 break
         return results
-    
+
     def get_all(self) -> list[EvidenceRecord]:
         """Get all evidence records."""
         return list(self._records.values())
-    
+
     def count(self) -> int:
         """Get the number of evidence records."""
         return len(self._records)
-    
+
     def get_unique_domains(self) -> set[str]:
         """Get the set of unique domains in the ledger."""
         from urllib.parse import urlparse
+
         domains = set()
         for record in self._records.values():
             try:
@@ -159,4 +160,3 @@ class EvidenceLedger:
             except Exception:
                 pass
         return domains
-

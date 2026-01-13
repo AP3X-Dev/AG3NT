@@ -28,7 +28,7 @@ class SkillRegistry:
     loaded from SKILL.md files in configured directories.
     """
 
-    def __init__(self, config: "SkillsConfig"):
+    def __init__(self, config: SkillsConfig):
         """Initialize the registry.
 
         Args:
@@ -319,4 +319,3 @@ class SkillRegistry:
 
         self._loaded = True
         return len(self._skills)
-

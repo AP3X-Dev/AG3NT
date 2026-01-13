@@ -5,19 +5,20 @@ you to interact with it to test the work management features.
 """
 
 import os
+
 from langchain.agents import create_agent
+
 from deepagents.middleware.universal_work import UniversalWorkMiddleware
 
 
 def main():
     """Run interactive demo of Universal Work System."""
-    
     # Check for API key
     if not os.getenv("ANTHROPIC_API_KEY"):
         print("Error: ANTHROPIC_API_KEY environment variable not set")
         print("Please set it with: export ANTHROPIC_API_KEY=your-key-here")
         return
-    
+
     print("=" * 70)
     print("Universal Work System - Interactive Demo")
     print("=" * 70)
@@ -34,13 +35,13 @@ def main():
     print()
     print("=" * 70)
     print()
-    
+
     # Create agent with Universal Work middleware
     agent = create_agent(
         model="anthropic:claude-sonnet-4-20250514",
         middleware=[UniversalWorkMiddleware(storage_path=".universal_work")],
     )
-    
+
     print("Agent ready! Try these example prompts:")
     print()
     print("1. 'Create a work item for fixing the login bug'")
@@ -52,24 +53,24 @@ def main():
     print("Type 'quit' or 'exit' to stop.")
     print("=" * 70)
     print()
-    
+
     # Interactive loop
     while True:
         try:
             user_input = input("\n👤 You: ").strip()
-            
+
             if not user_input:
                 continue
-            
+
             if user_input.lower() in ["quit", "exit", "q"]:
                 print("\n👋 Goodbye!")
                 break
-            
+
             print("\n🤖 Agent: ", end="", flush=True)
-            
+
             # Invoke agent
             result = agent.invoke({"messages": [{"role": "user", "content": user_input}]})
-            
+
             # Get the last AI message
             ai_messages = [msg for msg in result["messages"] if msg.type == "ai"]
             if ai_messages:
@@ -77,12 +78,12 @@ def main():
                 print(response)
             else:
                 print("(No response)")
-            
+
             # Show any tool calls for transparency
             tool_calls = [msg for msg in result["messages"] if msg.type == "tool"]
             if tool_calls and len(tool_calls) > 0:
                 print(f"\n   [Used {len(tool_calls)} tool(s)]")
-        
+
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")
             break
@@ -93,4 +94,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

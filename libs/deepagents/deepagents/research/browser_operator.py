@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -23,12 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class BrowserActionType(str, Enum):
     """Types of browser actions."""
-    
+
     NAVIGATE = "navigate"
     CLICK = "click"
     TYPE = "type"
@@ -41,7 +41,7 @@ class BrowserActionType(str, Enum):
 @dataclass
 class BrowserAction:
     """A single browser action."""
-    
+
     action_type: BrowserActionType
     target: str | None = None  # CSS selector or URL
     value: str | None = None  # Text to type or scroll amount
@@ -51,16 +51,16 @@ class BrowserAction:
 @dataclass
 class BrowserState:
     """Current state of the browser."""
-    
+
     url: str
     title: str | None = None
     page_content: str | None = None
     screenshot_path: str | None = None
-    
+
     # Observed elements
     clickable_elements: list[dict[str, Any]] = field(default_factory=list)
     input_elements: list[dict[str, Any]] = field(default_factory=list)
-    
+
     # Metadata
     step_count: int = 0
     last_action: BrowserAction | None = None
@@ -69,45 +69,45 @@ class BrowserState:
 
 class BrowserDriver(ABC):
     """Abstract interface for browser automation.
-    
+
     Implementations can use Playwright, Selenium, or other backends.
     """
-    
+
     @abstractmethod
     async def navigate(self, url: str) -> BrowserState:
         """Navigate to a URL."""
         ...
-    
+
     @abstractmethod
     async def click(self, selector: str) -> BrowserState:
         """Click an element."""
         ...
-    
+
     @abstractmethod
     async def type_text(self, selector: str, text: str) -> BrowserState:
         """Type text into an element."""
         ...
-    
+
     @abstractmethod
     async def scroll(self, direction: str = "down", amount: int = 500) -> BrowserState:
         """Scroll the page."""
         ...
-    
+
     @abstractmethod
     async def wait(self, selector: str | None = None, timeout_ms: int = 5000) -> BrowserState:
         """Wait for an element or timeout."""
         ...
-    
+
     @abstractmethod
     async def get_state(self) -> BrowserState:
         """Get current browser state."""
         ...
-    
+
     @abstractmethod
     async def extract_content(self) -> str:
         """Extract page content as markdown."""
         ...
-    
+
     @abstractmethod
     async def close(self) -> None:
         """Close the browser."""
@@ -116,11 +116,11 @@ class BrowserDriver(ABC):
 
 class MockBrowserDriver(BrowserDriver):
     """Mock browser driver for testing."""
-    
+
     def __init__(self) -> None:
         self._current_url = ""
         self._step_count = 0
-    
+
     async def navigate(self, url: str) -> BrowserState:
         self._current_url = url
         self._step_count += 1
@@ -129,7 +129,7 @@ class MockBrowserDriver(BrowserDriver):
             title=f"Mock Page: {url}",
             step_count=self._step_count,
         )
-    
+
     async def click(self, selector: str) -> BrowserState:
         self._step_count += 1
         return BrowserState(
@@ -138,7 +138,7 @@ class MockBrowserDriver(BrowserDriver):
             step_count=self._step_count,
             last_action=BrowserAction(BrowserActionType.CLICK, selector),
         )
-    
+
     async def type_text(self, selector: str, text: str) -> BrowserState:
         self._step_count += 1
         return BrowserState(
@@ -147,7 +147,7 @@ class MockBrowserDriver(BrowserDriver):
             step_count=self._step_count,
             last_action=BrowserAction(BrowserActionType.TYPE, selector, text),
         )
-    
+
     async def scroll(self, direction: str = "down", amount: int = 500) -> BrowserState:
         self._step_count += 1
         return BrowserState(
@@ -156,7 +156,7 @@ class MockBrowserDriver(BrowserDriver):
             step_count=self._step_count,
             last_action=BrowserAction(BrowserActionType.SCROLL, value=f"{direction}:{amount}"),
         )
-    
+
     async def wait(self, selector: str | None = None, timeout_ms: int = 5000) -> BrowserState:
         self._step_count += 1
         return BrowserState(
@@ -165,17 +165,17 @@ class MockBrowserDriver(BrowserDriver):
             step_count=self._step_count,
             last_action=BrowserAction(BrowserActionType.WAIT, selector),
         )
-    
+
     async def get_state(self) -> BrowserState:
         return BrowserState(
             url=self._current_url,
             title="Mock Page",
             step_count=self._step_count,
         )
-    
+
     async def extract_content(self) -> str:
         return f"# Mock Content\n\nThis is mock content from {self._current_url}"
-    
+
     async def close(self) -> None:
         pass
 
@@ -350,17 +350,16 @@ class BrowserOperator:
         """Execute a browser action."""
         if action.action_type == BrowserActionType.CLICK:
             return await self.driver.click(action.target or "")
-        elif action.action_type == BrowserActionType.TYPE:
+        if action.action_type == BrowserActionType.TYPE:
             return await self.driver.type_text(action.target or "", action.value or "")
-        elif action.action_type == BrowserActionType.SCROLL:
+        if action.action_type == BrowserActionType.SCROLL:
             parts = (action.value or "down:500").split(":")
             direction = parts[0]
             amount = int(parts[1]) if len(parts) > 1 else 500
             return await self.driver.scroll(direction, amount)
-        elif action.action_type == BrowserActionType.WAIT:
+        if action.action_type == BrowserActionType.WAIT:
             return await self.driver.wait(action.target, action.timeout_ms)
-        else:
-            return await self.driver.get_state()
+        return await self.driver.get_state()
 
     async def close(self) -> None:
         """Close the browser."""

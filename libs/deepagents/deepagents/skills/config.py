@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 
 @dataclass
@@ -54,6 +53,7 @@ class SkillsConfig:
         """Get the workspace directory, creating if needed."""
         if self.workspace_dir is None:
             import tempfile
+
             self.workspace_dir = Path(tempfile.mkdtemp(prefix="deepagents_skills_"))
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         return self.workspace_dir
@@ -79,4 +79,3 @@ class SkillsConfig:
                 path = Path.cwd() / path
             resolved.append(path.resolve())
         return resolved
-

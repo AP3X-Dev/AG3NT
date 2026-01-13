@@ -17,8 +17,6 @@ from deepagents.skills.models import (
     Skill,
     SkillBody,
     SkillMeta,
-    SkillMode,
-    SkillValidationError,
 )
 
 if TYPE_CHECKING:
@@ -46,7 +44,7 @@ class SkillLoader:
     the markdown body with all sections.
     """
 
-    def __init__(self, config: "SkillsConfig", registry: "SkillRegistry"):
+    def __init__(self, config: SkillsConfig, registry: SkillRegistry):
         """Initialize the loader.
 
         Args:
@@ -238,4 +236,3 @@ class SkillLoader:
             except Exception as e:
                 results[skill_id] = e
         return results
-

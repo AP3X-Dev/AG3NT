@@ -90,7 +90,7 @@ class ObservationMasker:
             if len(highlights) >= max_highlights:
                 break
             for pattern in important_patterns:
-                if re.match(pattern, line, re.I):
+                if re.match(pattern, line, re.IGNORECASE):
                     # Truncate long lines
                     highlight = line[:200] + "..." if len(line) > 200 else line
                     highlights.append(highlight)
@@ -147,12 +147,14 @@ class ObservationMasker:
 
         if not self.should_mask(content):
             # Keep in recent unmasked queue
-            self._recent_unmasked.append(UnmaskedObservation(
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                content=content,
-                timestamp=time.time(),
-            ))
+            self._recent_unmasked.append(
+                UnmaskedObservation(
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    content=content,
+                    timestamp=time.time(),
+                )
+            )
             return content
 
         # Content exceeds threshold - persist and mask
@@ -202,9 +204,7 @@ class ObservationMasker:
             )
             self._evidence_ledger.append(evidence)
 
-        logger.info(
-            f"Masked {tool_name} output: {len(content):,} chars -> artifact {artifact_id}"
-        )
+        logger.info(f"Masked {tool_name} output: {len(content):,} chars -> artifact {artifact_id}")
         return placeholder
 
     def get_placeholder_text(self, placeholder: MaskedObservationPlaceholder) -> str:
@@ -245,4 +245,3 @@ class ObservationMasker:
         removed = len(self._masked_placeholders) - keep_last
         self._masked_placeholders = self._masked_placeholders[-keep_last:]
         return removed
-

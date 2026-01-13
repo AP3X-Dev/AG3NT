@@ -14,26 +14,27 @@ import json
 import os
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware
+from langchain_core.messages import ToolMessage
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import AIMessageChunk, ToolMessage, HumanMessage
+
+from deepagents.backends import FilesystemBackend
 from deepagents.middleware import (
     AdvancedMiddleware,
     FilesystemMiddleware,
     ImageGenerationMiddleware,
-    SkillsMiddleware,
     SubAgentMiddleware,
     UtilitiesMiddleware,
     WebMiddleware,
 )
-from deepagents.backends import FilesystemBackend
 
 # Fix Windows console encoding for emojis
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
     except:
         pass
 
@@ -48,7 +49,6 @@ else:
 
 async def main():
     """Run interactive agent demo with streaming output."""
-
     # Get OpenRouter configuration from environment
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     openrouter_model = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
@@ -72,7 +72,7 @@ async def main():
     print("=" * 70)
     print()
     print(f"Model: {openrouter_model}")
-    print(f"API: OpenRouter")
+    print("API: OpenRouter")
     print()
     print("Initializing agent with all middleware...")
     print()
@@ -124,6 +124,7 @@ Use these paths directly (e.g., "ls /Downloads" or "glob *.png /Downloads").
     except Exception as e:
         print(f"[ERROR] Error initializing agent: {e}")
         import traceback
+
         traceback.print_exc()
         return
 
@@ -179,19 +180,17 @@ Use these paths directly (e.g., "ls /Downloads" or "glob *.png /Downloads").
                 except Exception as e:
                     error_msg = str(e)
                     # Check for transient/retryable errors
-                    is_retryable = any(x in error_msg.lower() for x in [
-                        "unexpected error", "try your request again",
-                        "rate limit", "timeout", "connection"
-                    ])
+                    is_retryable = any(
+                        x in error_msg.lower() for x in ["unexpected error", "try your request again", "rate limit", "timeout", "connection"]
+                    )
 
                     if is_retryable and attempt < max_retries:
                         print(f"\n[Retrying... ({attempt + 1}/{max_retries})]")
                         await asyncio.sleep(1)  # Brief pause before retry
                         continue
-                    else:
-                        print(f"\n[ERROR] {e}")
-                        conversation_history.pop()
-                        break
+                    print(f"\n[ERROR] {e}")
+                    conversation_history.pop()
+                    break
 
         except KeyboardInterrupt:
             print("\n\n[Goodbye!]")
@@ -203,7 +202,6 @@ Use these paths directly (e.g., "ls /Downloads" or "glob *.png /Downloads").
 
 async def stream_agent_response(agent, conversation_history: list):
     """Stream agent response with visible tool calls and thinking."""
-
     accumulated_text = ""
     tool_call_buffers = {}  # Track partial tool calls
     active_tool_calls = {}  # Track tools being executed
@@ -260,10 +258,7 @@ async def stream_agent_response(agent, conversation_history: list):
 
                         # Buffer tool call chunks
                         buffer_key = chunk_index if chunk_index is not None else chunk_id or 0
-                        buffer = tool_call_buffers.setdefault(
-                            buffer_key,
-                            {"name": None, "id": None, "args": "", "shown": False}
-                        )
+                        buffer = tool_call_buffers.setdefault(buffer_key, {"name": None, "id": None, "args": "", "shown": False})
 
                         if chunk_name:
                             buffer["name"] = chunk_name
@@ -312,4 +307,3 @@ async def stream_agent_response(agent, conversation_history: list):
 
 if __name__ == "__main__":
     asyncio.run(main())
-

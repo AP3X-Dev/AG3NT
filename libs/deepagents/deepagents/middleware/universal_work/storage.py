@@ -11,7 +11,7 @@ import abc
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,6 @@ from deepagents.middleware.universal_work.models import (
     AgentSession,
     FeedbackEvent,
     Link,
-    LinkType,
     PlanStep,
     WorkItem,
     WorkItemStatus,
@@ -31,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class WorkStorageProtocol(abc.ABC):
     """Abstract protocol for Universal Work System storage.
-    
+
     All implementations must be storage-agnostic and support:
     - CRUD operations for all entity types
     - Filtering and querying
@@ -39,7 +38,7 @@ class WorkStorageProtocol(abc.ABC):
     """
 
     # --- WorkItem Operations ---
-    
+
     @abc.abstractmethod
     def create_work_item(self, item: WorkItem) -> WorkItem:
         """Create a new WorkItem."""
@@ -173,6 +172,7 @@ class WorkStorageProtocol(abc.ABC):
 
 class DateTimeEncoder(json.JSONEncoder):
     """JSON encoder that handles datetime objects."""
+
     def default(self, obj):
         if isinstance(obj, datetime):
             return obj.isoformat()
@@ -238,7 +238,7 @@ class FileBackendStorage(WorkStorageProtocol):
     def _read_json(self, filename: str) -> Any:
         """Read and parse a JSON file."""
         filepath = self.base_path / filename
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             return json.load(f, object_hook=datetime_decoder)
 
     def _write_json(self, filename: str, data: Any) -> None:
@@ -263,7 +263,7 @@ class FileBackendStorage(WorkStorageProtocol):
 
     def update_work_item(self, item: WorkItem) -> WorkItem:
         items = self._read_json("work_items.json")
-        item.updated_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.now(UTC)
         items[item.id] = item.model_dump()
         self._write_json("work_items.json", items)
         return item
@@ -299,7 +299,7 @@ class FileBackendStorage(WorkStorageProtocol):
 
         # Sort by created_at descending, then apply pagination
         result.sort(key=lambda x: x.created_at, reverse=True)
-        return result[offset:offset + limit]
+        return result[offset : offset + limit]
 
     # --- PlanStep Operations ---
 
@@ -311,16 +311,13 @@ class FileBackendStorage(WorkStorageProtocol):
 
     def get_plan_steps(self, work_item_id: str) -> list[PlanStep]:
         steps = self._read_json("plan_steps.json")
-        result = [
-            PlanStep(**s) for s in steps.values()
-            if s.get("work_item_id") == work_item_id
-        ]
+        result = [PlanStep(**s) for s in steps.values() if s.get("work_item_id") == work_item_id]
         result.sort(key=lambda x: x.position)
         return result
 
     def update_plan_step(self, step: PlanStep) -> PlanStep:
         steps = self._read_json("plan_steps.json")
-        step.updated_at = datetime.now(timezone.utc)
+        step.updated_at = datetime.now(UTC)
         steps[step.id] = step.model_dump()
         self._write_json("plan_steps.json", steps)
         return step
@@ -358,10 +355,7 @@ class FileBackendStorage(WorkStorageProtocol):
 
     def get_links(self, work_item_id: str) -> list[Link]:
         links = self._read_json("links.json")
-        return [
-            Link(**l) for l in links.values()
-            if l.get("from_id") == work_item_id or l.get("to_id") == work_item_id
-        ]
+        return [Link(**l) for l in links.values() if l.get("from_id") == work_item_id or l.get("to_id") == work_item_id]
 
     # --- AgentSession Operations ---
 
@@ -393,10 +387,7 @@ class FileBackendStorage(WorkStorageProtocol):
 
     def get_activities(self, session_id: str) -> list[AgentActivity]:
         activities = self._read_json("activities.json")
-        result = [
-            AgentActivity(**a) for a in activities.values()
-            if a.get("session_id") == session_id
-        ]
+        result = [AgentActivity(**a) for a in activities.values() if a.get("session_id") == session_id]
         result.sort(key=lambda x: x.timestamp)
         return result
 
@@ -418,4 +409,3 @@ class FileBackendStorage(WorkStorageProtocol):
         context = self._read_json("context.json")
         context["current_work_item_id"] = item_id
         self._write_json("context.json", context)
-

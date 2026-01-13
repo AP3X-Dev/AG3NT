@@ -142,4 +142,3 @@ async def ainvoke_vision_model(
     except Exception as e:
         logger.warning(f"Async vision model invocation failed: {e}")
         raise
-

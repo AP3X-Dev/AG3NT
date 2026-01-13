@@ -10,10 +10,9 @@ This module provides a wrapper for running research subagents that:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 from deepagents.compaction.models import (
     Confidence,
@@ -78,13 +77,14 @@ class ResearchSubagentRunner:
             # Look for finding patterns
             # Pattern: "Finding: <claim>" or "Conclusion: <claim>"
             import re
+
             patterns = [
                 r"(?:finding|conclusion|result|discovered)[:\s]+(.+?)(?:\.|$)",
                 r"(?:confirmed|verified|established)[:\s]+(.+?)(?:\.|$)",
             ]
 
             for pattern in patterns:
-                matches = re.findall(pattern, content, re.I | re.MULTILINE)
+                matches = re.findall(pattern, content, re.IGNORECASE | re.MULTILINE)
                 for match in matches[:3]:
                     claim = match.strip()
                     if len(claim) > 20:
@@ -95,11 +95,13 @@ class ResearchSubagentRunner:
                         elif any(w in content.lower() for w in ["possibly", "might", "unclear"]):
                             confidence = Confidence.LOW
 
-                        findings.append(Finding(
-                            claim=claim[:300],
-                            confidence=confidence,
-                            evidence_artifact_ids=artifact_ids[:3],  # Link to recent artifacts
-                        ))
+                        findings.append(
+                            Finding(
+                                claim=claim[:300],
+                                confidence=confidence,
+                                evidence_artifact_ids=artifact_ids[:3],  # Link to recent artifacts
+                            )
+                        )
 
         return findings[:10]  # Limit findings
 
@@ -264,6 +266,7 @@ class ResearchSubagentRunner:
             lines.append("### Extracted Data")
             lines.append("```json")
             import json
+
             lines.append(json.dumps(bundle.extracted_data_json, indent=2)[:500])
             lines.append("```")
 

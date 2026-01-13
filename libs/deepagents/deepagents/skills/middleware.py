@@ -7,9 +7,10 @@ providing tools for skill discovery, loading, and execution.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from deepagents.skills.applier import SkillApplier, ScopeType
+from deepagents.skills.applier import ScopeType, SkillApplier
 from deepagents.skills.builder import SkillBuilder
 from deepagents.skills.config import SkillsConfig
 from deepagents.skills.ledger import SkillUsageLedger
@@ -17,9 +18,6 @@ from deepagents.skills.loader import SkillLoader
 from deepagents.skills.models import SkillMode, SkillSpec, SkillUsageRecord
 from deepagents.skills.registry import SkillRegistry
 from deepagents.skills.spawner import SkillSpawner
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -298,10 +296,7 @@ class SkillsToolkitMiddleware:
             limit=args.get("limit", 5),
         )
         return {
-            "recommendations": [
-                {"id": s.id, "name": s.name, "description": s.description}
-                for s in skills
-            ],
+            "recommendations": [{"id": s.id, "name": s.name, "description": s.description} for s in skills],
         }
 
     def _handle_apply_skill(self, args: dict[str, Any]) -> dict[str, Any]:
@@ -400,4 +395,3 @@ class SkillsToolkitMiddleware:
         for _, skill, _ in self.applier.get_active_skills():
             blocks.append(skill.get_context_block())
         return "\n\n".join(blocks)
-

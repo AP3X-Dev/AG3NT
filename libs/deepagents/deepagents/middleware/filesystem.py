@@ -4,10 +4,7 @@
 import os
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import TYPE_CHECKING, Annotated, Literal, NotRequired
-
-if TYPE_CHECKING:
-    from langchain_core.language_models import BaseChatModel
+from typing import Annotated, Literal, NotRequired
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -28,11 +25,7 @@ from deepagents.backends import StateBackend
 from deepagents.backends.protocol import BACKEND_TYPES as BACKEND_TYPES
 from deepagents.backends.protocol import (
     BackendProtocol,
-    CopyResult,
-    DeleteResult,
     EditResult,
-    MkdirResult,
-    MoveResult,
     SandboxBackendProtocol,
     WriteResult,
 )
@@ -516,8 +509,8 @@ def _supports_native_paths(resolved_backend: BackendProtocol) -> bool:
         True if native absolute paths are supported, False otherwise.
     """
     # Import here to avoid circular imports
-    from deepagents.backends.filesystem import FilesystemBackend
     from deepagents.backends.composite import CompositeBackend
+    from deepagents.backends.filesystem import FilesystemBackend
 
     # Check if it's a FilesystemBackend with virtual_mode=False
     if isinstance(resolved_backend, FilesystemBackend):
@@ -1136,8 +1129,6 @@ def _mkdir_tool_generator(
     )
 
 
-
-
 # Type alias for vision model callable
 # Takes (image_bytes, query, context, file_type) -> analysis_text
 VisionModelCallable = Callable[[bytes, str, str | None, str], str]
@@ -1147,6 +1138,7 @@ AsyncVisionModelCallable = Callable[[bytes, str, str | None, str], Awaitable[str
 def _get_file_type_from_extension(path: str) -> str:
     """Get MIME type from file extension."""
     import mimetypes
+
     mime_type, _ = mimetypes.guess_type(path)
     return mime_type or "application/octet-stream"
 

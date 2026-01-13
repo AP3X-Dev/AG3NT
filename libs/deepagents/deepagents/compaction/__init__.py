@@ -26,7 +26,10 @@ Usage:
     agent = create_deep_agent(middleware=[middleware])
 """
 
+from deepagents.compaction.artifact_store import ArtifactStore
+from deepagents.compaction.assembler import AssembledContext, ContextAssembler, ContextBlock
 from deepagents.compaction.config import CompactionConfig
+from deepagents.compaction.middleware import CompactionMiddleware
 from deepagents.compaction.models import (
     ArtifactMeta,
     EvidenceRecord,
@@ -35,13 +38,10 @@ from deepagents.compaction.models import (
     ReasoningState,
     ResearchBundle,
 )
-from deepagents.compaction.artifact_store import ArtifactStore
 from deepagents.compaction.observation_masker import ObservationMasker
-from deepagents.compaction.summarizer import ReasoningStateSummarizer
-from deepagents.compaction.retrieval import RetrievalIndex, RetrievalResult
-from deepagents.compaction.assembler import ContextAssembler, ContextBlock, AssembledContext
 from deepagents.compaction.research_subagent import ResearchSubagentRunner
-from deepagents.compaction.middleware import CompactionMiddleware
+from deepagents.compaction.retrieval import RetrievalIndex, RetrievalResult
+from deepagents.compaction.summarizer import ReasoningStateSummarizer
 
 __all__ = [
     # Config
@@ -65,4 +65,3 @@ __all__ = [
     "ResearchSubagentRunner",
     "CompactionMiddleware",
 ]
-

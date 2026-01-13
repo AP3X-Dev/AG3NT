@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,32 +30,32 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class SessionState(BaseModel):
     """Serializable state of a research session."""
-    
+
     session_id: str
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
-    
+
     # Research brief
     brief: ResearchBrief | None = None
-    
+
     # Progress tracking
     current_step: int = 0
     status: str = "created"  # created, running, paused, completed, failed
-    
+
     # Source queue
     source_queue: list[SourceQueueItem] = Field(default_factory=list)
-    
+
     # Reasoning state timeline
     reasoning_states: list[ReasoningState] = Field(default_factory=list)
-    
+
     # Final output
     result_bundle: ResearchBundle | None = None
-    
+
     # Metrics
     total_artifacts: int = 0
     total_bytes_persisted: int = 0
@@ -65,18 +65,18 @@ class SessionState(BaseModel):
 
 class ResearchSession:
     """Resumable research workspace.
-    
+
     A ResearchSession manages the complete state of a research task,
     including artifacts, evidence, source queue, and final results.
     Sessions are addressable by session_id and can be resumed across runs.
-    
+
     Args:
         session_id: Unique identifier for the session.
         workspace_dir: Directory for session workspace.
         config: Research configuration.
         compaction_config: Optional compaction configuration override.
     """
-    
+
     def __init__(
         self,
         session_id: str,
@@ -87,23 +87,23 @@ class ResearchSession:
         self.session_id = session_id
         self.workspace_dir = workspace_dir
         self.config = config
-        
+
         # Ensure workspace exists
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize compaction config for this session
         self.compaction_config = compaction_config or CompactionConfig(
             workspace_dir=self.workspace_dir,
         )
-        
+
         # Initialize components
         self.artifact_store = ArtifactStore(self.compaction_config)
         self.evidence_ledger = EvidenceLedger(self.workspace_dir, config)
-        
+
         # Load or create state
         self._state_path = self.workspace_dir / "session_state.json"
         self._state = self._load_state()
-    
+
     def _load_state(self) -> SessionState:
         """Load session state from disk or create new."""
         if self._state_path.exists():
@@ -113,15 +113,15 @@ class ResearchSession:
                 return SessionState.model_validate(data)
             except Exception as e:
                 logger.warning(f"Failed to load session state: {e}")
-        
+
         return SessionState(session_id=self.session_id)
-    
+
     def _save_state(self) -> None:
         """Save session state to disk."""
         self._state.updated_at = _utcnow()
         with open(self._state_path, "w", encoding="utf-8") as f:
             f.write(self._state.model_dump_json(indent=2))
-    
+
     @classmethod
     def create(
         cls,
@@ -130,19 +130,19 @@ class ResearchSession:
         session_id: str | None = None,
     ) -> ResearchSession:
         """Create a new research session.
-        
+
         Args:
             workspace_dir: Base directory for the session.
             config: Research configuration.
             session_id: Optional session ID (generated if not provided).
-            
+
         Returns:
             A new ResearchSession instance.
         """
         config = config or ResearchConfig()
         session_id = session_id or f"rs_{uuid.uuid4().hex[:12]}"
         workspace_dir = workspace_dir or config.get_session_dir(session_id)
-        
+
         session = cls(
             session_id=session_id,
             workspace_dir=workspace_dir,
@@ -151,7 +151,7 @@ class ResearchSession:
         session._save_state()
         logger.info(f"Created research session: {session_id}")
         return session
-    
+
     @classmethod
     def load(
         cls,
@@ -159,20 +159,20 @@ class ResearchSession:
         config: ResearchConfig | None = None,
     ) -> ResearchSession:
         """Load an existing research session.
-        
+
         Args:
             session_id: The session ID to load.
             config: Research configuration.
-            
+
         Returns:
             The loaded ResearchSession.
-            
+
         Raises:
             FileNotFoundError: If the session doesn't exist.
         """
         config = config or ResearchConfig()
         workspace_dir = config.get_session_dir(session_id)
-        
+
         if not workspace_dir.exists():
             raise FileNotFoundError(f"Session not found: {session_id}")
 
@@ -235,6 +235,7 @@ class ResearchSession:
     def get_pending_sources(self) -> list[SourceQueueItem]:
         """Get sources that haven't been processed yet."""
         from deepagents.research.models import SourceStatus
+
         pending = [SourceStatus.QUEUED, SourceStatus.BROWSER_NEEDED]
         return [s for s in self._state.source_queue if s.status in pending]
 
@@ -303,10 +304,7 @@ class ResearchSession:
             "status": self._state.status,
             "current_step": self._state.current_step,
             "total_sources": len(self._state.source_queue),
-            "sources_processed": len([
-                s for s in self._state.source_queue
-                if s.status.value in ("read", "browsed", "errored", "rejected")
-            ]),
+            "sources_processed": len([s for s in self._state.source_queue if s.status.value in ("read", "browsed", "errored", "rejected")]),
             "evidence_count": self.evidence_ledger.count(),
             "unique_domains": len(self.evidence_ledger.get_unique_domains()),
             "total_artifacts": self._state.total_artifacts,
@@ -314,4 +312,3 @@ class ResearchSession:
             "browser_escalations": self._state.browser_escalations,
             "error_count": len(self._state.errors),
         }
-

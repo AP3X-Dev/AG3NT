@@ -69,20 +69,23 @@ class CompactionConfig:
     redact_secrets: bool = True
 
     # Block priorities (lower = higher priority, included first)
-    block_priorities: dict[str, int] = field(default_factory=lambda: {
-        "working_memory": 1,
-        "plan_state": 2,
-        "decision_ledger": 3,
-        "reasoning_state": 4,
-        "recent_observations": 5,
-        "masked_placeholders": 6,
-        "retrieved_snippets": 7,
-    })
+    block_priorities: dict[str, int] = field(
+        default_factory=lambda: {
+            "working_memory": 1,
+            "plan_state": 2,
+            "decision_ledger": 3,
+            "reasoning_state": 4,
+            "recent_observations": 5,
+            "masked_placeholders": 6,
+            "retrieved_snippets": 7,
+        }
+    )
 
     def get_workspace_dir(self) -> Path:
         """Get the workspace directory, creating a temp dir if needed."""
         if self.workspace_dir is None:
             import tempfile
+
             self.workspace_dir = Path(tempfile.mkdtemp(prefix="deepagents_compaction_"))
         return self.workspace_dir
 
@@ -108,4 +111,3 @@ class CompactionConfig:
         """Estimate token count for text (rough approximation)."""
         # Rough estimate: ~4 characters per token for English text
         return len(text) // 4
-

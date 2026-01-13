@@ -19,12 +19,11 @@ import asyncio
 from pathlib import Path
 
 from deepagents import create_deep_agent
-from deepagents.mcp import MCPConfig, MCPServerConfig, FailBehavior
+from deepagents.mcp import FailBehavior, MCPConfig, MCPServerConfig
 
 
 async def main():
     """Run an agent with MCP tools."""
-
     # Get the path to the math server
     math_server_path = Path(__file__).parent / "math_server.py"
 
@@ -73,4 +72,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

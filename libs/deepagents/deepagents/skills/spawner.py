@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from deepagents.skills.models import Skill, SkillMode, SkillUsageRecord
 
@@ -45,9 +46,9 @@ class SkillSpawner:
 
     def __init__(
         self,
-        config: "SkillsConfig",
-        loader: "SkillLoader",
-        ledger: "SkillUsageLedger",
+        config: SkillsConfig,
+        loader: SkillLoader,
+        ledger: SkillUsageLedger,
         agent_factory: Callable[[str, str, list[str]], Any] | None = None,
     ):
         """Initialize the spawner.
@@ -171,4 +172,3 @@ class SkillSpawner:
     def list_active(self) -> list[SkillSubagent]:
         """List active (non-completed) subagents."""
         return [s for s in self._subagents.values() if not s.completed]
-

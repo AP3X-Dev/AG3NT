@@ -16,7 +16,6 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -82,7 +81,7 @@ class RetrievalIndex:
         Returns:
             sqlite3.Connection for the current thread.
         """
-        if not hasattr(self._local, 'conn') or self._local.conn is None:
+        if not hasattr(self._local, "conn") or self._local.conn is None:
             self._local.conn = sqlite3.connect(str(self._db_path))
             logger.debug(f"Created new SQLite connection for thread {threading.current_thread().name}")
         return self._local.conn
@@ -226,7 +225,7 @@ class RetrievalIndex:
             top_k = self.config.retrieval_top_k
 
         # Escape special FTS5 characters
-        safe_query = re.sub(r'[^\w\s]', ' ', query)
+        safe_query = re.sub(r"[^\w\s]", " ", query)
         terms = safe_query.split()
         if not terms:
             return []
@@ -254,12 +253,14 @@ class RetrievalIndex:
         results = []
 
         for row in cursor.fetchall():
-            results.append(RetrievalResult(
-                artifact_id=row[0],
-                snippet=row[2],
-                line_number=row[1],
-                score=abs(row[3]),  # BM25 returns negative scores
-            ))
+            results.append(
+                RetrievalResult(
+                    artifact_id=row[0],
+                    snippet=row[2],
+                    line_number=row[1],
+                    score=abs(row[3]),  # BM25 returns negative scores
+                )
+            )
 
         return results
 
@@ -295,9 +296,9 @@ class RetrievalIndex:
             end = min(len(lines), result.line_number + context_lines)
 
             if start < result.line_number - 1:
-                result.context_before = "\n".join(lines[start:result.line_number - 1])
+                result.context_before = "\n".join(lines[start : result.line_number - 1])
             if end > result.line_number:
-                result.context_after = "\n".join(lines[result.line_number:end])
+                result.context_after = "\n".join(lines[result.line_number : end])
 
         return results
 
@@ -328,7 +329,7 @@ class RetrievalIndex:
         Other threads' connections remain open until they call close()
         or are garbage collected.
         """
-        if hasattr(self._local, 'conn') and self._local.conn is not None:
+        if hasattr(self._local, "conn") and self._local.conn is not None:
             self._local.conn.close()
             self._local.conn = None
             logger.debug(f"Closed SQLite connection for thread {threading.current_thread().name}")

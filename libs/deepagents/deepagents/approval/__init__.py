@@ -11,24 +11,23 @@ Usage:
 
     policy = ApprovalPolicy()
     interrupt_on = policy.to_interrupt_on_config()
-    
+
     agent = create_deep_agent(
         middleware=[HumanInTheLoopMiddleware(interrupt_on=interrupt_on)]
     )
 """
 
+from deepagents.approval.ledger import ApprovalLedger, ApprovalRecord
 from deepagents.approval.policy import (
+    DEFAULT_TOOL_CLASSIFICATIONS,
     ApprovalPolicy,
     ToolRiskLevel,
-    DEFAULT_TOOL_CLASSIFICATIONS,
 )
-from deepagents.approval.ledger import ApprovalLedger, ApprovalRecord
 
 __all__ = [
-    "ApprovalPolicy",
-    "ToolRiskLevel",
     "DEFAULT_TOOL_CLASSIFICATIONS",
     "ApprovalLedger",
+    "ApprovalPolicy",
     "ApprovalRecord",
+    "ToolRiskLevel",
 ]
-

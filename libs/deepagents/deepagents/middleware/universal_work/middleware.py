@@ -9,20 +9,15 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
-    AgentState,
     ModelRequest,
     ModelResponse,
-    ToolCallRequest,
 )
 from langchain.tools import ToolRuntime
-from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from langgraph.runtime import Runtime
-from langgraph.types import Command
 
 from deepagents.middleware.universal_work.models import (
     ActivityType,
@@ -35,23 +30,17 @@ from deepagents.middleware.universal_work.models import (
     PlanStep,
     PlanStepStatus,
     SuggestionType,
-    TriageSuggestion,
-    TriageSuggestionBundle,
     WorkItem,
     WorkItemStatus,
+)
+from deepagents.middleware.universal_work.retrieval import (
+    RetrievalBackend,
+    TriageEngine,
 )
 from deepagents.middleware.universal_work.storage import (
     FileBackendStorage,
     WorkStorageProtocol,
 )
-from deepagents.middleware.universal_work.retrieval import (
-    RetrievalBackend,
-    SimpleKeywordRetrieval,
-    TriageEngine,
-)
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +79,7 @@ Use this to:
 
 # --- Backward-Compatible Todo Tools ---
 
+
 def _create_write_todos_tool(storage: WorkStorageProtocol) -> BaseTool:
     """Create the write_todos tool backed by persistent storage."""
 
@@ -100,7 +90,7 @@ def _create_write_todos_tool(storage: WorkStorageProtocol) -> BaseTool:
         """Write todos to the current WorkItem's plan steps."""
         # Get or create current WorkItem
         current_id = storage.get_current_work_item_id()
-        
+
         if current_id is None:
             # Auto-create WorkItem from current objective
             item = WorkItem(
@@ -128,21 +118,20 @@ def _create_write_todos_tool(storage: WorkStorageProtocol) -> BaseTool:
         if item:
             all_completed = all(s.status == PlanStepStatus.COMPLETED for s in plan_steps)
             any_in_progress = any(s.status == PlanStepStatus.IN_PROGRESS for s in plan_steps)
-            
+
             if all_completed and plan_steps:
                 item.status = WorkItemStatus.DONE
             elif any_in_progress:
                 item.status = WorkItemStatus.IN_PROGRESS
-            
+
             storage.update_work_item(item)
 
         return f"Updated {len(plan_steps)} plan steps for WorkItem {current_id}"
 
     def sync_write_todos(todos: list[dict[str, Any]], runtime: ToolRuntime) -> str:
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            async_write_todos(todos, runtime)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(async_write_todos(todos, runtime))
 
     return StructuredTool.from_function(
         name="write_todos",
@@ -158,15 +147,16 @@ def _create_read_todos_tool(storage: WorkStorageProtocol) -> BaseTool:
     async def async_read_todos(runtime: ToolRuntime) -> list[dict[str, Any]]:
         """Read todos from the current WorkItem's plan steps."""
         current_id = storage.get_current_work_item_id()
-        
+
         if current_id is None:
             return []
-        
+
         steps = storage.get_plan_steps(current_id)
         return [step.to_todo_dict() for step in steps]
 
     def sync_read_todos(runtime: ToolRuntime) -> list[dict[str, Any]]:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_read_todos(runtime))
 
     return StructuredTool.from_function(
@@ -232,6 +222,7 @@ def _create_work_item_create_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_create(**kwargs) -> dict[str, Any]:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_create(**kwargs))
 
     return StructuredTool.from_function(
@@ -270,6 +261,7 @@ def _create_work_item_get_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_get(item_id: str, runtime: ToolRuntime = None) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_get(item_id, runtime))
 
     return StructuredTool.from_function(
@@ -318,6 +310,7 @@ def _create_inbox_list_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_list(**kwargs) -> list[dict[str, Any]]:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_list(**kwargs))
 
     return StructuredTool.from_function(
@@ -371,6 +364,7 @@ def _create_link_create_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_create(**kwargs) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_create(**kwargs))
 
     return StructuredTool.from_function(
@@ -407,6 +401,7 @@ def _create_link_list_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_list(item_id: str, runtime: ToolRuntime = None) -> list[dict[str, Any]]:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_list(item_id, runtime))
 
     return StructuredTool.from_function(
@@ -460,6 +455,7 @@ def _create_session_start_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_start(**kwargs) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_start(**kwargs))
 
     return StructuredTool.from_function(
@@ -509,6 +505,7 @@ def _create_activity_log_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_log(**kwargs) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_log(**kwargs))
 
     return StructuredTool.from_function(
@@ -562,6 +559,7 @@ def _create_feedback_record_tool(storage: WorkStorageProtocol) -> BaseTool:
 
     def sync_record(**kwargs) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_record(**kwargs))
 
     return StructuredTool.from_function(
@@ -631,11 +629,14 @@ def _create_triage_suggest_tool(
                 "suggested": result.priority.suggested_value,
                 "confidence": result.priority.confidence,
                 "reasons": result.priority.reasons,
-            } if result.priority else None,
+            }
+            if result.priority
+            else None,
         }
 
     def sync_suggest(**kwargs) -> dict[str, Any] | str:
         import asyncio
+
         return asyncio.get_event_loop().run_until_complete(async_suggest(**kwargs))
 
     return StructuredTool.from_function(
@@ -685,6 +686,7 @@ Best practices:
 
 
 # --- Middleware Class ---
+
 
 class UniversalWorkMiddleware(AgentMiddleware):
     """Universal Work System Middleware - Drop-in replacement for TodoListMiddleware.
@@ -771,11 +773,7 @@ class UniversalWorkMiddleware(AgentMiddleware):
 
         # Generate enabled tools
         tools_to_enable = enabled_tools or self.ALL_TOOLS
-        self.tools = [
-            self._tool_generators[name]()
-            for name in tools_to_enable
-            if name in self._tool_generators
-        ]
+        self.tools = [self._tool_generators[name]() for name in tools_to_enable if name in self._tool_generators]
 
     def wrap_model_call(
         self,
@@ -786,11 +784,7 @@ class UniversalWorkMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or UNIVERSAL_WORK_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return handler(request)
@@ -804,12 +798,7 @@ class UniversalWorkMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or UNIVERSAL_WORK_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return await handler(request)
-

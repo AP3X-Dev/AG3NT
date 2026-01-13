@@ -5,7 +5,7 @@ All models use Pydantic for validation and serialization.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 def _utcnow() -> datetime:
     """Get current UTC time in a timezone-aware manner."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Confidence(str, Enum):
@@ -66,10 +66,7 @@ class Finding(BaseModel):
 
     claim: str = Field(..., description="The factual claim or finding")
     confidence: Confidence = Field(Confidence.MEDIUM, description="Confidence level")
-    evidence_artifact_ids: list[str] = Field(
-        default_factory=list,
-        description="IDs of artifacts supporting this claim"
-    )
+    evidence_artifact_ids: list[str] = Field(default_factory=list, description="IDs of artifacts supporting this claim")
     notes: str | None = Field(None, description="Additional notes or caveats")
 
 
@@ -85,10 +82,7 @@ class MaskedObservationPlaceholder(BaseModel):
     digest: str = Field(..., description="Short summary of the content")
     artifact_id: str = Field(..., description="ID of the stored artifact")
     artifact_path: str = Field(..., description="Path to the stored artifact")
-    highlights: list[str] = Field(
-        default_factory=list,
-        description="Key extracted highlights from the content"
-    )
+    highlights: list[str] = Field(default_factory=list, description="Key extracted highlights from the content")
     size_bytes: int = Field(..., description="Original size of the content")
     created_at: datetime = Field(default_factory=_utcnow)
 
@@ -114,26 +108,11 @@ class ReasoningState(BaseModel):
     """
 
     executive_summary: str = Field(..., description="High-level summary of progress")
-    confirmed_facts: list[str] = Field(
-        default_factory=list,
-        description="Facts confirmed with evidence"
-    )
-    hypotheses: list[str] = Field(
-        default_factory=list,
-        description="Working hypotheses not yet confirmed"
-    )
-    open_questions: list[str] = Field(
-        default_factory=list,
-        description="Questions still to be answered"
-    )
-    visited_sources: list[str] = Field(
-        default_factory=list,
-        description="URLs or artifact IDs of sources visited"
-    )
-    next_actions: list[str] = Field(
-        default_factory=list,
-        description="Planned next actions"
-    )
+    confirmed_facts: list[str] = Field(default_factory=list, description="Facts confirmed with evidence")
+    hypotheses: list[str] = Field(default_factory=list, description="Working hypotheses not yet confirmed")
+    open_questions: list[str] = Field(default_factory=list, description="Questions still to be answered")
+    visited_sources: list[str] = Field(default_factory=list, description="URLs or artifact IDs of sources visited")
+    next_actions: list[str] = Field(default_factory=list, description="Planned next actions")
     created_at: datetime = Field(default_factory=_utcnow)
     step_number: int = Field(0, description="Agent step when this was created")
 
@@ -146,17 +125,7 @@ class ResearchBundle(BaseModel):
 
     executive_summary: str = Field(..., description="High-level summary of findings")
     findings: list[Finding] = Field(default_factory=list, description="Key findings")
-    evidence: list[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Evidence sources consulted"
-    )
-    extracted_data_json: dict[str, Any] | None = Field(
-        None,
-        description="Structured data extracted during research"
-    )
-    open_questions: list[str] = Field(
-        default_factory=list,
-        description="Questions that couldn't be answered"
-    )
+    evidence: list[EvidenceRecord] = Field(default_factory=list, description="Evidence sources consulted")
+    extracted_data_json: dict[str, Any] | None = Field(None, description="Structured data extracted during research")
+    open_questions: list[str] = Field(default_factory=list, description="Questions that couldn't be answered")
     created_at: datetime = Field(default_factory=_utcnow)
-

@@ -24,58 +24,58 @@ Usage:
 
     # Create a new research session
     session = ResearchSession.create(workspace_dir=Path("./research"))
-    
+
     # Run research with an orchestrator
     orchestrator = ResearchOrchestrator(session=session)
     bundle = await orchestrator.research(
         goal="Find the latest pricing for AWS Lambda",
         constraints={"recency": "last_30_days"},
     )
-    
+
     # Use the bundle in main agent context
     print(bundle.executive_summary)
 """
 
+from deepagents.research.browser_operator import (
+    BrowserAction,
+    BrowserActionType,
+    BrowserDriver,
+    BrowserOperator,
+    BrowserState,
+    BrowserTask,
+    BrowserTaskResult,
+    MockBrowserDriver,
+)
 from deepagents.research.config import ResearchConfig
+from deepagents.research.distiller import (
+    Distiller,
+    ExtractionResult,
+    Extractor,
+)
+from deepagents.research.evidence_ledger import EvidenceLedger
 from deepagents.research.models import (
     ResearchBrief,
     ResearchMode,
     SourceQueueItem,
-    SourceStatus,
     SourceReasonCode,
+    SourceStatus,
 )
-from deepagents.research.session import ResearchSession
-from deepagents.research.evidence_ledger import EvidenceLedger
 from deepagents.research.orchestrator import ResearchOrchestrator
-from deepagents.research.source_collector import (
-    SourceCollector,
-    SearchProvider,
-    SearchResult,
-    MockSearchProvider,
-)
-from deepagents.research.page_reader import PageReader, PageContent
-from deepagents.research.browser_operator import (
-    BrowserOperator,
-    BrowserDriver,
-    BrowserTask,
-    BrowserTaskResult,
-    BrowserAction,
-    BrowserActionType,
-    BrowserState,
-    MockBrowserDriver,
-)
-from deepagents.research.distiller import (
-    Distiller,
-    Extractor,
-    ExtractionResult,
-)
+from deepagents.research.page_reader import PageContent, PageReader
 from deepagents.research.reviewer import (
+    FollowUpTask,
+    Gap,
+    GapType,
     Reviewer,
     ReviewResult,
     ReviewStatus,
-    Gap,
-    GapType,
-    FollowUpTask,
+)
+from deepagents.research.session import ResearchSession
+from deepagents.research.source_collector import (
+    MockSearchProvider,
+    SearchProvider,
+    SearchResult,
+    SourceCollector,
 )
 
 __all__ = [
@@ -121,4 +121,3 @@ __all__ = [
     "GapType",
     "FollowUpTask",
 ]
-

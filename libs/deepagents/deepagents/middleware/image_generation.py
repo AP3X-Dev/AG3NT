@@ -20,7 +20,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
@@ -62,6 +62,7 @@ def get_workspace_path() -> Path:
     # Ensure workspace exists
     path.mkdir(parents=True, exist_ok=True)
     return path
+
 
 # Supported aspect ratios and their dimensions
 ASPECT_RATIOS = {
@@ -183,10 +184,7 @@ def _extract_image_from_response(data: dict[str, Any]) -> dict[str, Any]:
         img = images[0]
         # Handle various image URL formats
         image_url = (
-            img.get("imageUrl", {}).get("url")
-            or img.get("image_url", {}).get("url")
-            or img.get("url")
-            or (img if isinstance(img, str) else None)
+            img.get("imageUrl", {}).get("url") or img.get("image_url", {}).get("url") or img.get("url") or (img if isinstance(img, str) else None)
         )
         if image_url:
             if image_url.startswith("data:"):
@@ -226,8 +224,7 @@ def _extract_image_from_response(data: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "image_data": None, "error": f"No image generated. Model said: {content[:300]}"}
 
     # Log the full message structure for debugging
-    logger.warning("Could not extract image from message. Keys: %s, Content type: %s",
-                  list(message.keys()), type(content).__name__)
+    logger.warning("Could not extract image from message. Keys: %s, Content type: %s", list(message.keys()), type(content).__name__)
     if content:
         logger.debug("Content structure: %s", content[:2] if isinstance(content, list) else str(content)[:200])
 
@@ -301,8 +298,7 @@ async def _generate_image(
         return {"success": False, "image_data": None, "error": f"HTTP {e.response.status_code}: {error_text}"}
     except Exception as e:
         logger.exception("Error generating image")
-        return {"success": False, "image_data": None, "error": f"Error: {str(e)}"}
-
+        return {"success": False, "image_data": None, "error": f"Error: {e!s}"}
 
 
 async def _edit_image(
@@ -357,10 +353,12 @@ async def _edit_image(
     if additional_images:
         for i, img_bytes in enumerate(additional_images[:4]):  # Max 5 total images
             b64_ref = base64.b64encode(img_bytes).decode("utf-8")
-            content.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{file_type};base64,{b64_ref}"},
-            })
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{file_type};base64,{b64_ref}"},
+                }
+            )
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -390,8 +388,7 @@ async def _edit_image(
         return {"success": False, "image_data": None, "error": f"HTTP {e.response.status_code}: {error_text}"}
     except Exception as e:
         logger.exception("Error editing image")
-        return {"success": False, "image_data": None, "error": f"Error: {str(e)}"}
-
+        return {"success": False, "image_data": None, "error": f"Error: {e!s}"}
 
 
 # --- Tool Generators ---
@@ -443,9 +440,9 @@ def _make_generate_image_tool(
 
             # Handle Unix-style root paths on Windows (e.g., /ww3_assessment.html)
             # These should be relative to workspace, not C:\
-            if os.name == 'nt' and str(output_path).startswith('/'):
+            if os.name == "nt" and str(output_path).startswith("/"):
                 # Strip leading slash and make relative to workspace
-                relative_path = output_path.lstrip('/')
+                relative_path = output_path.lstrip("/")
                 save_file = workspace / relative_path
             elif not save_file.is_absolute():
                 # For relative paths, resolve relative to workspace
@@ -481,9 +478,8 @@ def _make_generate_image_tool(
     ) -> str:
         """Sync version of generate_image."""
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            async_generate_image(prompt, aspect_ratio, image_size, output_path, runtime)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(async_generate_image(prompt, aspect_ratio, image_size, output_path, runtime))
 
     return StructuredTool.from_function(
         name="generate_image",
@@ -569,9 +565,9 @@ def _make_edit_image_tool(
 
             # Handle Unix-style root paths on Windows (e.g., /ww3_assessment.html)
             # These should be relative to workspace, not C:\
-            if os.name == 'nt' and str(output_path).startswith('/'):
+            if os.name == "nt" and str(output_path).startswith("/"):
                 # Strip leading slash and make relative to workspace
-                relative_path = output_path.lstrip('/')
+                relative_path = output_path.lstrip("/")
                 save_file = workspace / relative_path
             elif not save_file.is_absolute():
                 # For relative paths, resolve relative to workspace
@@ -607,9 +603,8 @@ def _make_edit_image_tool(
     ) -> str:
         """Sync version of edit_image."""
         import asyncio
-        return asyncio.get_event_loop().run_until_complete(
-            async_edit_image(image_path, instruction, aspect_ratio, image_size, output_path, runtime)
-        )
+
+        return asyncio.get_event_loop().run_until_complete(async_edit_image(image_path, instruction, aspect_ratio, image_size, output_path, runtime))
 
     return StructuredTool.from_function(
         name="edit_image",
@@ -713,11 +708,7 @@ class ImageGenerationMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or IMAGE_GEN_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return handler(request)
@@ -731,11 +722,7 @@ class ImageGenerationMiddleware(AgentMiddleware):
         system_prompt = self._custom_system_prompt or IMAGE_GEN_SYSTEM_PROMPT
 
         if system_prompt:
-            new_prompt = (
-                request.system_prompt + "\n\n" + system_prompt
-                if request.system_prompt
-                else system_prompt
-            )
+            new_prompt = request.system_prompt + "\n\n" + system_prompt if request.system_prompt else system_prompt
             request = request.override(system_prompt=new_prompt)
 
         return await handler(request)

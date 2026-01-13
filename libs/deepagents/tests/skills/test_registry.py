@@ -1,12 +1,13 @@
 """Tests for skills registry."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from deepagents.skills.config import SkillsConfig
-from deepagents.skills.registry import SkillRegistry
 from deepagents.skills.models import SkillMode
+from deepagents.skills.registry import SkillRegistry
 
 
 @pytest.fixture
@@ -17,7 +18,7 @@ def temp_skills_dir():
         skill_dir.mkdir()
 
         skill_md = skill_dir / "SKILL.md"
-        skill_md.write_text('''---
+        skill_md.write_text("""---
 id: test-skill
 name: Test Skill
 description: A test skill for unit testing
@@ -54,7 +55,7 @@ Text output.
 ## Failure Modes and Recovery
 
 Handle errors gracefully.
-''')
+""")
         yield tmpdir
 
 
@@ -162,4 +163,3 @@ class TestSkillRegistry:
 
             meta = registry2.get("test-skill")
             assert meta is not None
-

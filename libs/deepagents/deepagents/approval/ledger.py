@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ApprovalRecord:
     """Record of a single approval decision.
-    
+
     Attributes:
         tool_name: Name of the tool that required approval.
         tool_args: Arguments passed to the tool.
@@ -24,7 +24,7 @@ class ApprovalRecord:
         session_id: Optional session identifier.
         reason: Optional reason for the decision.
     """
-    
+
     tool_name: str
     tool_args: dict[str, Any]
     decision: Literal["approve", "reject", "edit", "auto"]
@@ -44,7 +44,7 @@ class ApprovalRecord:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ApprovalRecord":
+    def from_dict(cls, data: dict[str, Any]) -> ApprovalRecord:
         """Create from dictionary."""
         return cls(
             tool_name=data["tool_name"],
@@ -58,7 +58,7 @@ class ApprovalRecord:
 
 class ApprovalLedger:
     """Ledger for tracking approval decisions.
-    
+
     Provides:
     1. Persistent storage of approval decisions
     2. Query interface for audit trails
@@ -67,13 +67,13 @@ class ApprovalLedger:
 
     def __init__(self, ledger_path: Path | None = None) -> None:
         """Initialize ledger.
-        
+
         Args:
             ledger_path: Path to ledger file. If None, uses in-memory only.
         """
         self.ledger_path = ledger_path
         self._records: list[ApprovalRecord] = []
-        
+
         if ledger_path and ledger_path.exists():
             self._load()
 
@@ -93,7 +93,7 @@ class ApprovalLedger:
     ) -> list[ApprovalRecord]:
         """Query records with optional filters."""
         results = self._records
-        
+
         if tool_name:
             results = [r for r in results if r.tool_name == tool_name]
         if decision:
@@ -102,23 +102,23 @@ class ApprovalLedger:
             results = [r for r in results if r.session_id == session_id]
         if since:
             results = [r for r in results if r.timestamp >= since]
-            
+
         return results
 
     def get_stats(self) -> dict[str, Any]:
         """Get statistics on approval patterns."""
         if not self._records:
             return {"total": 0}
-            
+
         by_tool: dict[str, dict[str, int]] = {}
         by_decision: dict[str, int] = {}
-        
+
         for r in self._records:
             by_decision[r.decision] = by_decision.get(r.decision, 0) + 1
             if r.tool_name not in by_tool:
                 by_tool[r.tool_name] = {}
             by_tool[r.tool_name][r.decision] = by_tool[r.tool_name].get(r.decision, 0) + 1
-        
+
         return {
             "total": len(self._records),
             "by_decision": by_decision,
@@ -147,4 +147,3 @@ class ApprovalLedger:
                 f.write(json.dumps(record.to_dict()) + "\n")
         except Exception as e:
             logger.warning(f"Failed to write to ledger: {e}")
-

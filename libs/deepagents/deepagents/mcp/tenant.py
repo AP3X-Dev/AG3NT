@@ -8,12 +8,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Protocol
 
 from deepagents.mcp.config import MCPServerConfig, ServerInstanceScope, TenantMode
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +163,5 @@ class ClientPool:
             return (server_name, "shared")
 
         # Per-tenant scope
-        tenant_id = self._tenant_resolver.resolve_tenant_id(
-            request_context, server_config
-        )
+        tenant_id = self._tenant_resolver.resolve_tenant_id(request_context, server_config)
         return (server_name, tenant_id)
-

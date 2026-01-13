@@ -53,9 +53,7 @@ class MCPServerConfig(BaseModel):
     """
 
     # Transport configuration
-    transport: Literal["stdio", "http"] = Field(
-        description="Transport type: 'stdio' for local process, 'http' for remote server"
-    )
+    transport: Literal["stdio", "http"] = Field(description="Transport type: 'stdio' for local process, 'http' for remote server")
 
     # Stdio transport fields
     command: str | None = Field(
@@ -142,7 +140,7 @@ class MCPServerConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def validate_transport_fields(self) -> "MCPServerConfig":
+    def validate_transport_fields(self) -> MCPServerConfig:
         """Validate that required fields are set for each transport type."""
         if self.transport == "stdio":
             if not self.command:
@@ -220,9 +218,7 @@ class MCPConfig(BaseModel):
         ```
     """
 
-    servers: dict[str, MCPServerConfig] = Field(
-        description="Named MCP server configurations"
-    )
+    servers: dict[str, MCPServerConfig] = Field(description="Named MCP server configurations")
     fail_behavior: FailBehavior = Field(
         default=FailBehavior.FAIL_OPEN,
         description="Default behavior when server connections fail",
@@ -231,7 +227,7 @@ class MCPConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
-    def validate_server_names(self) -> "MCPConfig":
+    def validate_server_names(self) -> MCPConfig:
         """Validate that server names are valid identifiers."""
         name_pattern = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
         for name in self.servers:
@@ -253,4 +249,3 @@ class MCPConfig(BaseModel):
         if server and server.fail_behavior is not None:
             return server.fail_behavior
         return self.fail_behavior
-

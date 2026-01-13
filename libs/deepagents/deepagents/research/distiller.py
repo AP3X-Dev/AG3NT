@@ -12,10 +12,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
-from deepagents.compaction.models import Confidence, EvidenceRecord, Finding
+from deepagents.compaction.models import Confidence, Finding
 from deepagents.research.config import ResearchConfig
 from deepagents.research.page_reader import PageContent
 
@@ -23,45 +22,45 @@ logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass
 class ExtractionResult:
     """Result of extracting information from a source."""
-    
+
     source_url: str
     artifact_id: str
-    
+
     # Extracted content
     key_facts: list[str] = field(default_factory=list)
     quotes: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
-    
+
     # Metadata
     topic_relevance: float = 0.5
     information_density: float = 0.5
-    
+
     # Errors
     error: str | None = None
 
 
 class Extractor:
     """Extracts structured information from page content.
-    
+
     The Extractor uses pattern matching and heuristics to identify:
     - Key facts and claims
     - Important quotes
     - Named entities (people, organizations, products)
     - Numerical data and statistics
-    
+
     Args:
         config: Research configuration.
     """
-    
+
     def __init__(self, config: ResearchConfig) -> None:
         self.config = config
-    
+
     def extract(
         self,
         content: PageContent,
@@ -69,12 +68,12 @@ class Extractor:
         goal: str | None = None,
     ) -> ExtractionResult:
         """Extract information from page content.
-        
+
         Args:
             content: The page content to extract from.
             artifact_id: ID of the stored artifact.
             goal: Optional research goal for relevance scoring.
-            
+
         Returns:
             ExtractionResult with extracted information.
         """
@@ -84,26 +83,26 @@ class Extractor:
                 artifact_id=artifact_id,
                 error=content.error,
             )
-        
+
         text = content.content
-        
+
         # Extract key facts (sentences with factual indicators)
         key_facts = self._extract_key_facts(text)
-        
+
         # Extract quotes (text in quotation marks)
         quotes = self._extract_quotes(text)
-        
+
         # Extract entities
         entities = self._extract_entities(text)
-        
+
         # Calculate relevance if goal provided
         topic_relevance = 0.5
         if goal:
             topic_relevance = self._calculate_relevance(text, goal)
-        
+
         # Calculate information density
         information_density = self._calculate_density(text, key_facts, quotes)
-        
+
         return ExtractionResult(
             source_url=content.url,
             artifact_id=artifact_id,
@@ -113,68 +112,68 @@ class Extractor:
             topic_relevance=topic_relevance,
             information_density=information_density,
         )
-    
+
     def _extract_key_facts(self, text: str) -> list[str]:
         """Extract key factual statements."""
         facts = []
-        
+
         # Split into sentences
-        sentences = re.split(r'[.!?]+', text)
-        
+        sentences = re.split(r"[.!?]+", text)
+
         # Factual indicators
         indicators = [
-            r'\b\d+%',  # Percentages
-            r'\$[\d,]+',  # Dollar amounts
-            r'\b\d{4}\b',  # Years
-            r'\b(according to|research shows|studies indicate|data shows)\b',
-            r'\b(announced|released|launched|introduced)\b',
-            r'\b(increased|decreased|grew|declined)\b',
+            r"\b\d+%",  # Percentages
+            r"\$[\d,]+",  # Dollar amounts
+            r"\b\d{4}\b",  # Years
+            r"\b(according to|research shows|studies indicate|data shows)\b",
+            r"\b(announced|released|launched|introduced)\b",
+            r"\b(increased|decreased|grew|declined)\b",
         ]
-        
+
         for sentence in sentences:
             sentence = sentence.strip()
             if len(sentence) < 20 or len(sentence) > 300:
                 continue
-            
+
             for pattern in indicators:
                 if re.search(pattern, sentence, re.IGNORECASE):
                     facts.append(sentence)
                     break
-        
+
         return facts
-    
+
     def _extract_quotes(self, text: str) -> list[str]:
         """Extract quoted text."""
         quotes = []
-        
+
         # Match text in quotes
         patterns = [
             r'"([^"]{20,200})"',
             r"'([^']{20,200})'",
             r'"([^"]{20,200})"',
         ]
-        
+
         for pattern in patterns:
             matches = re.findall(pattern, text)
             quotes.extend(matches)
-        
+
         return quotes
-    
+
     def _extract_entities(self, text: str) -> list[str]:
         """Extract named entities (simplified)."""
         entities = []
-        
+
         # Look for capitalized phrases (simple NER)
-        pattern = r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b'
+        pattern = r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b"
         matches = re.findall(pattern, text)
-        
+
         # Deduplicate
         seen = set()
         for match in matches:
             if match not in seen and len(match) > 3:
                 entities.append(match)
                 seen.add(match)
-        
+
         return entities
 
     def _calculate_relevance(self, text: str, goal: str) -> float:
@@ -183,7 +182,7 @@ class Extractor:
         goal_lower = goal.lower()
 
         # Extract keywords from goal
-        goal_words = set(re.findall(r'\b\w{4,}\b', goal_lower))
+        goal_words = set(re.findall(r"\b\w{4,}\b", goal_lower))
 
         # Count matches
         matches = sum(1 for word in goal_words if word in text_lower)
@@ -259,17 +258,17 @@ class Distiller:
         # Add quote-based findings
         for extraction in extractions:
             for quote in extraction.quotes[:2]:
-                findings.append(Finding(
-                    claim=f'Source states: "{quote[:150]}"',
-                    confidence=Confidence.HIGH,
-                    evidence_artifact_ids=[extraction.artifact_id],
-                ))
+                findings.append(
+                    Finding(
+                        claim=f'Source states: "{quote[:150]}"',
+                        confidence=Confidence.HIGH,
+                        evidence_artifact_ids=[extraction.artifact_id],
+                    )
+                )
 
         # Sort by confidence and relevance
         findings.sort(
-            key=lambda f: (
-                {"high": 3, "medium": 2, "low": 1}.get(f.confidence.value, 0),
-            ),
+            key=lambda f: ({"high": 3, "medium": 2, "low": 1}.get(f.confidence.value, 0),),
             reverse=True,
         )
 
@@ -313,7 +312,7 @@ class Distiller:
 
             words1 = set(fact1.lower().split())
 
-            for j, (fact2, aid2) in enumerate(all_facts[i+1:], i+1):
+            for j, (fact2, aid2) in enumerate(all_facts[i + 1 :], i + 1):
                 if j in used:
                     continue
 
