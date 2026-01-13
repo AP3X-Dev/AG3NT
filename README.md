@@ -13,8 +13,6 @@ A sophisticated agent harness that combines:
 - **Context compaction** for handling massive codebases and long conversations
 - **Multi-provider LLM support** via OpenRouter, Anthropic, OpenAI, and Google
 
-<img src=".github/images/AG3NT_header.png" alt="AG3NT" width="100%"/>
-
 ## 🎯 What Makes AG3NT Different
 
 | Feature | Basic Agents | AG3NT |
