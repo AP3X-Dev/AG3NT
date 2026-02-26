@@ -4,7 +4,7 @@ import type { FormEvent, KeyboardEvent, ChangeEvent } from "react"
 import { useRef, useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowUp, Paperclip, Sparkles, Terminal, FolderOpen, Square, Zap, X, FileText, Image as ImageIcon } from "lucide-react"
+import { ArrowUp, Paperclip, Sparkles, Terminal, FolderOpen, Square, Zap, X, FileText, Image as ImageIcon, ClipboardList } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { AutocompleteMenu } from "./autocomplete-menu"
 import { InputModeIndicator } from "./input-mode-indicator"
@@ -28,6 +28,12 @@ interface ChatInputProps {
   onStop?: () => void
   selectedModel?: string
   onModelChange?: (model: string) => void
+  // Plan mode
+  planMode?: boolean
+  onPlanModeChange?: (enabled: boolean) => void
+  // Plan execution status
+  planStatus?: 'idle' | 'planning' | 'reviewing' | 'executing' | 'complete'
+  planProgress?: { currentStep: number; totalSteps: number; description: string } | null
   // File attachments
   attachments?: FileAttachment[]
   onAttachmentsChange?: (attachments: FileAttachment[]) => void
@@ -56,6 +62,10 @@ export function ChatInput({
   onStop,
   selectedModel,
   onModelChange,
+  planMode = false,
+  onPlanModeChange,
+  planStatus,
+  planProgress,
   attachments = [],
   onAttachmentsChange,
 }: ChatInputProps) {
@@ -239,8 +249,8 @@ export function ChatInput({
       data-testid="chat-input-form"
       onSubmit={onSubmit}
       className={cn(
-        "relative flex flex-col border border-[#2a2a2a] rounded-lg bg-[#1a1a1a]",
-        "transition-all duration-200 focus-within:border-[#3a3a3a] focus-within:hover-underglow-primary",
+        "relative flex flex-col border border-border-default rounded-xl bg-surface-input/80 backdrop-blur-sm",
+        "transition-all duration-200 hover:border-border-strong chat-input-focus",
         className
       )}
     >
@@ -312,20 +322,55 @@ export function ChatInput({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 shrink-0 active:scale-[0.97]",
               autoApprove
-                ? "bg-[#2a2a1a] border border-[#4a4a2a] text-amber-400 hover-underglow-amber"
-                : "bg-[#1e1e1e] border border-[#2a2a2a] text-text-muted hover:text-text-secondary hover-underglow"
+                ? "bg-amber-500/10 border border-amber-500/20 text-amber-400 hover-underglow-amber"
+                : "bg-interactive-hover border border-border-default text-text-muted hover:text-text-secondary hover-underglow"
             )}
           >
             <Zap className={cn("h-3.5 w-3.5", autoApprove && "fill-current")} />
             <div className={cn(
               "w-6 h-3.5 rounded-full transition-all duration-200 relative",
-              autoApprove ? "bg-amber-500" : "bg-[#3a3a3a]"
+              autoApprove ? "bg-amber-500" : "bg-interactive-hover"
             )}>
               <div className={cn(
                 "absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all duration-200",
                 autoApprove ? "translate-x-3" : "translate-x-0.5"
               )} />
             </div>
+          </button>
+
+          {/* Plan Mode toggle */}
+          <button
+            type="button"
+            onClick={() => onPlanModeChange?.(!planMode)}
+            title={planMode ? `Plan mode ON — ${planStatus || 'idle'}` : "Plan mode OFF"}
+            className={cn(
+              "flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-all duration-150 shrink-0 active:scale-[0.97]",
+              planMode
+                ? planStatus === "executing"
+                  ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                  : planStatus === "reviewing"
+                    ? "bg-amber-500/10 border border-amber-500/20 text-amber-400"
+                    : "bg-blue-500/10 border border-blue-500/20 text-blue-400 hover-underglow-blue"
+                : "bg-interactive-hover border border-border-default text-text-muted hover:text-text-secondary hover-underglow"
+            )}
+          >
+            <ClipboardList className={cn("h-3.5 w-3.5", planMode && "fill-current")} />
+            <span className="hidden sm:inline">
+              {planMode
+                ? planStatus === "planning" ? "Planning..."
+                  : planStatus === "reviewing" ? "Review"
+                  : planStatus === "executing" ? `Step ${planProgress?.currentStep || '?'}/${planProgress?.totalSteps || '?'}`
+                  : planStatus === "complete" ? "Done"
+                  : "Plan"
+                : "Plan"
+              }
+            </span>
+            {planMode && (planStatus === "planning" || planStatus === "executing") && (
+              <span className={cn(
+                "w-1.5 h-1.5 rounded-full animate-pulse",
+                planStatus === "executing" ? "bg-emerald-400" : "bg-blue-400"
+              )} />
+            )}
           </button>
 
           {/* Model Selector - truncated inline */}
@@ -347,7 +392,7 @@ export function ChatInput({
             variant="ghost"
             size="icon"
             aria-label="Browse files"
-            className="h-7 w-7 text-text-muted hover:text-text-secondary hover:bg-[#252525] transition-all duration-150 active:scale-[0.95]"
+            className="h-7 w-7 text-text-muted hover:text-text-secondary hover:bg-interactive-hover transition-all duration-150 active:scale-[0.95]"
             disabled={isLoading}
           >
             <FolderOpen className="h-4 w-4" />
@@ -360,7 +405,7 @@ export function ChatInput({
             size="icon"
             aria-label="Terminal mode"
             className={cn(
-              "h-7 w-7 hover:bg-[#252525] transition-all duration-150 active:scale-[0.95]",
+              "h-7 w-7 hover:bg-interactive-hover transition-all duration-150 active:scale-[0.95]",
               inputMode === "bash-command" ? "text-pink-400" : "text-text-muted hover:text-text-secondary"
             )}
             disabled={isLoading}
@@ -373,7 +418,7 @@ export function ChatInput({
             variant="ghost"
             size="icon"
             aria-label="AI features"
-            className="h-7 w-7 text-text-muted hover:text-text-secondary hover:bg-[#252525] transition-all duration-150 active:scale-[0.95]"
+            className="h-7 w-7 text-text-muted hover:text-text-secondary hover:bg-interactive-hover transition-all duration-150 active:scale-[0.95]"
             disabled={isLoading}
           >
             <Sparkles className="h-4 w-4" />
@@ -383,7 +428,7 @@ export function ChatInput({
             variant="ghost"
             size="icon"
             className={cn(
-              "h-7 w-7 hover:bg-[#252525] transition-all duration-150 active:scale-[0.95]",
+              "h-7 w-7 hover:bg-interactive-hover transition-all duration-150 active:scale-[0.95]",
               attachments.length > 0
                 ? "text-blue-400 hover:text-blue-300"
                 : "text-text-muted hover:text-text-secondary"
@@ -406,7 +451,7 @@ export function ChatInput({
               onClick={onStop}
               size="icon"
               aria-label="Stop generation"
-              className="h-7 w-7 bg-[#3a2a2a] border border-[#4a3a3a] text-[#ff6b6b] hover:bg-[#4a3a3a] hover-underglow-red transition-all duration-150 active:scale-[0.95]"
+              className="h-7 w-7 bg-red-500/15 border border-red-500/25 text-red-400 hover:bg-red-500/20 hover:shadow-[0_0_10px_rgba(239,68,68,0.2)] transition-all duration-150 active:scale-[0.95]"
             >
               <Square className="h-3.5 w-3.5 fill-current" />
             </Button>
@@ -419,8 +464,8 @@ export function ChatInput({
               className={cn(
                 "h-7 w-7 transition-all duration-150 active:scale-[0.95]",
                 (value.trim() || attachments.length > 0)
-                  ? "bg-[#2a3a2a] border border-[#3a4a3a] text-[#69db7c] hover:bg-[#3a4a3a] hover-underglow-green"
-                  : "bg-[#1e1e1e] border border-[#2a2a2a] text-text-muted"
+                  ? "bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20 hover:shadow-[0_0_10px_rgba(52,211,153,0.2)]"
+                  : "bg-interactive-hover border border-border-default text-text-muted"
               )}
             >
               <ArrowUp className="h-4 w-4" />
@@ -445,7 +490,7 @@ function FileAttachmentPreview({ attachment, onRemove }: FileAttachmentPreviewPr
   const isImage = attachment.type.startsWith('image/')
 
   return (
-    <div className="relative group flex items-center gap-2 px-2 py-1.5 bg-[#252525] border border-[#353535] rounded-md max-w-[200px]">
+    <div className="relative group flex items-center gap-2 px-2 py-1.5 bg-interactive-hover border border-border-default rounded-md max-w-[200px]">
       {/* Preview */}
       {isImage && attachment.dataUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -455,7 +500,7 @@ function FileAttachmentPreview({ attachment, onRemove }: FileAttachmentPreviewPr
           className="h-8 w-8 object-cover rounded"
         />
       ) : (
-        <div className="h-8 w-8 flex items-center justify-center bg-[#1a1a1a] rounded">
+        <div className="h-8 w-8 flex items-center justify-center bg-interactive-hover rounded">
           <FileText className="h-4 w-4 text-text-muted" />
         </div>
       )}
