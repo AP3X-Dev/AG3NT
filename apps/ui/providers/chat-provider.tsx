@@ -34,11 +34,25 @@ const debugLog: (...args: unknown[]) => void =
     ? (...args: unknown[]) => { console.log(...args); }
     : () => {};
 
-// Default model - Claude Opus 4.6 via Anthropic API
-const DEFAULT_MODEL = "claude-opus-4-6";
+// Default model - Kimi K2.5 via OpenRouter (works without Anthropic credits)
+const DEFAULT_MODEL = "moonshotai/kimi-k2.5";
 
 // Valid model IDs for validation
-const VALID_MODEL_IDS = new Set(AVAILABLE_MODELS.map(m => m.id));
+const VALID_MODEL_IDS: Set<string> = new Set(AVAILABLE_MODELS.map(m => m.id));
+
+/**
+ * Derive the gateway provider key from a chat-bar model ID.
+ * - IDs with "/" are OpenRouter models (e.g. "anthropic/claude-sonnet-4.5")
+ * - "kimi-for-coding" → "kimi" (direct Kimi API)
+ * - "claude-opus-4-6" → "anthropic" (direct Anthropic API)
+ * - Fallback → "openrouter"
+ */
+function deriveProvider(modelId: string): string {
+  if (modelId.includes("/")) return "openrouter";
+  if (modelId === "kimi-for-coding") return "kimi";
+  if (modelId.startsWith("claude-")) return "anthropic";
+  return "openrouter";
+}
 
 /**
  * Format a user-friendly status message for tool execution.
@@ -112,10 +126,19 @@ interface ChatState {
   streamingMessageId: string | null;
   // Selected model
   selectedModel: string;
+  // Plan mode
+  planMode: boolean;
   // Thread history
   threads: ThreadInfo[];
   threadsLoading: boolean;
   showThreadHistory: boolean;
+  // Plan execution state
+  planStatus: "idle" | "planning" | "reviewing" | "executing" | "complete";
+  planProgress: {
+    currentStep: number;
+    totalSteps: number;
+    description: string;
+  } | null;
 }
 
 interface ChatContextType extends ChatState {
@@ -132,6 +155,7 @@ interface ChatContextType extends ChatState {
   setError: (error: string | null) => void;
   setAutoApprove: (enabled: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setPlanMode: (enabled: boolean) => void;
   stopAgent: () => void;
   clearCachesAndRestart: () => Promise<any>;
   status: string | null;
@@ -142,6 +166,11 @@ interface ChatContextType extends ChatState {
   deleteThread: (threadId: string) => Promise<void>;
   createNewThread: () => void;
   toggleThreadHistory: () => void;
+  // Plan approval
+  decidePlanApproval: (
+    decision: "approve" | "reject",
+    reason?: string,
+  ) => Promise<void>;
 }
 
 // Actions
@@ -179,10 +208,23 @@ type ChatAction =
     }
   | { type: "SET_STREAMING_MESSAGE_ID"; payload: string | null }
   | { type: "SET_SELECTED_MODEL"; payload: string }
+  | { type: "SET_PLAN_MODE"; payload: boolean }
   | { type: "SET_THREADS"; payload: ThreadInfo[] }
   | { type: "SET_THREADS_LOADING"; payload: boolean }
   | { type: "SET_SHOW_THREAD_HISTORY"; payload: boolean }
-  | { type: "REMOVE_THREAD"; payload: string };
+  | { type: "REMOVE_THREAD"; payload: string }
+  | {
+      type: "SET_PLAN_STATUS";
+      payload: "idle" | "planning" | "reviewing" | "executing" | "complete";
+    }
+  | {
+      type: "SET_PLAN_PROGRESS";
+      payload: {
+        currentStep: number;
+        totalSteps: number;
+        description: string;
+      } | null;
+    };
 
 // Initial state
 const initialState: ChatState = {
@@ -197,9 +239,12 @@ const initialState: ChatState = {
   statusMessage: null,
   streamingMessageId: null,
   selectedModel: DEFAULT_MODEL,
+  planMode: false,
   threads: [],
   threadsLoading: false,
   showThreadHistory: false,
+  planStatus: "idle",
+  planProgress: null,
 };
 
 // Reducer
@@ -324,6 +369,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, streamingMessageId: action.payload };
     case "SET_SELECTED_MODEL":
       return { ...state, selectedModel: action.payload };
+    case "SET_PLAN_MODE":
+      return { ...state, planMode: action.payload };
     case "SET_THREADS":
       return { ...state, threads: action.payload };
     case "SET_THREADS_LOADING":
@@ -335,6 +382,10 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         threads: state.threads.filter((t) => t.threadId !== action.payload),
       };
+    case "SET_PLAN_STATUS":
+      return { ...state, planStatus: action.payload };
+    case "SET_PLAN_PROGRESS":
+      return { ...state, planProgress: action.payload };
     default:
       return state;
   }
@@ -404,24 +455,36 @@ export function ChatProvider({ children }: ChatProviderProps) {
     }
   }, [state.autoApprove]);
 
-  // Persist selected model
+  // Persist selected model & sync with gateway on mount
   useEffect(() => {
+    // First apply localStorage immediately (avoids flash of default model)
     try {
       const saved = localStorage.getItem("ap3x.selectedModel");
-      if (saved) {
-        // Validate the saved model is still a valid model ID
-        if (VALID_MODEL_IDS.has(saved)) {
-          dispatch({ type: "SET_SELECTED_MODEL", payload: saved });
-        } else {
-          // Invalid cached model - clear it and use default
-          console.warn(`[Chat] Invalid cached model "${saved}", using default`);
-          localStorage.removeItem("ap3x.selectedModel");
-          dispatch({ type: "SET_SELECTED_MODEL", payload: DEFAULT_MODEL });
-        }
+      if (saved && VALID_MODEL_IDS.has(saved)) {
+        dispatch({ type: "SET_SELECTED_MODEL", payload: saved });
+      } else if (saved) {
+        console.warn(`[Chat] Invalid cached model "${saved}", using default`);
+        localStorage.removeItem("ap3x.selectedModel");
       }
     } catch {
       // ignore
     }
+
+    // Then fetch gateway config — gateway is source of truth when reachable
+    fetch("/api/ag3nt/gateway/model/config", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data) => {
+        const gatewayModel = data?.model as string | undefined;
+        if (gatewayModel && VALID_MODEL_IDS.has(gatewayModel)) {
+          debugLog("[Chat] Gateway model config:", gatewayModel);
+          dispatch({ type: "SET_SELECTED_MODEL", payload: gatewayModel });
+        } else {
+          debugLog("[Chat] Gateway model not in AVAILABLE_MODELS, keeping local:", gatewayModel);
+        }
+      })
+      .catch(() => {
+        debugLog("[Chat] Gateway unreachable, using localStorage/default");
+      });
   }, []);
 
   useEffect(() => {
@@ -625,6 +688,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
             message: content,
             autoApprove: state.autoApprove,
             model: state.selectedModel,
+            planMode: state.planMode,
             attachments:
               attachments && attachments.length > 0 ? attachments : undefined,
             uiContext,
@@ -1104,6 +1168,136 @@ export function ChatProvider({ children }: ChatProviderProps) {
                       },
                     });
                   }
+                } else if (currentEvent === "tool_progress") {
+                  // Progress updates from long-running tools (e.g. parallel_tasks)
+                  const msg = data.message || `Executing ${data.toolName || "tool"}...`;
+                  debugLog("[Chat] tool_progress:", msg);
+                  dispatch({
+                    type: "SET_STATUS",
+                    payload: {
+                      status: "executing",
+                      message: msg,
+                    },
+                  });
+
+                // ── Plan execution SSE events ──
+                } else if (currentEvent === "plan_created") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "planning" });
+
+                } else if (currentEvent === "plan_approval_requested") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "reviewing" });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-approval-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planApproval: {
+                        planPath: data.plan_path || data.planPath || "",
+                        planContent: data.plan_content || data.planContent || "",
+                        summary: data.summary || "",
+                        stepCount: data.step_count || data.stepCount || 0,
+                        checkpointCount:
+                          data.checkpoint_count || data.checkpointCount || 0,
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_approved") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "executing" });
+
+                } else if (currentEvent === "plan_rejected") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "idle" });
+
+                } else if (currentEvent === "plan_step_started") {
+                  dispatch({
+                    type: "SET_PLAN_PROGRESS",
+                    payload: {
+                      currentStep: data.step_number || data.stepNumber || 0,
+                      totalSteps: data.total_steps || data.totalSteps || 0,
+                      description: data.description || "",
+                    },
+                  });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-step-${data.step_number || data.stepNumber}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planProgress: {
+                        currentStep: data.step_number || data.stepNumber || 0,
+                        totalSteps: data.total_steps || data.totalSteps || 0,
+                        description: data.description || "",
+                        status: "running" as const,
+                        steps: [],
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_step_completed") {
+                  const stepNum = data.step_number || data.stepNumber || 0;
+                  const existingMsgId = `plan-step-${stepNum}`;
+                  const existingMsg = messagesRef.current.find(
+                    (m) => m.id === existingMsgId,
+                  );
+                  if (existingMsg) {
+                    dispatch({
+                      type: "UPDATE_MESSAGE",
+                      payload: {
+                        id: existingMsgId,
+                        updates: {
+                          planProgress: {
+                            currentStep: stepNum,
+                            totalSteps:
+                              data.total_steps || data.totalSteps || 0,
+                            description: data.description || "",
+                            status: data.success
+                              ? ("completed" as const)
+                              : ("failed" as const),
+                            steps: [],
+                          },
+                        },
+                      },
+                    });
+                  }
+
+                } else if (currentEvent === "plan_checkpoint") {
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-checkpoint-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planCheckpoint: {
+                        stepNumber: data.step_number || data.stepNumber || 0,
+                        passed: data.validation_result?.passed ?? true,
+                        summary: data.validation_result?.summary || "",
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_execution_completed") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "complete" });
+                  dispatch({ type: "SET_PLAN_PROGRESS", payload: null });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-summary-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planSummary: {
+                        success: data.success ?? true,
+                        stepsCompleted:
+                          data.steps_completed || data.stepsCompleted || 0,
+                        totalSteps: data.total_steps || data.totalSteps || 0,
+                      },
+                    },
+                  });
+
                 } else if (currentEvent === "done") {
                   debugLog("[Chat] Received done event");
                   dispatch({
@@ -1151,7 +1345,7 @@ export function ChatProvider({ children }: ChatProviderProps) {
         });
       }
     },
-    [state.threadId, state.assistantId, state.autoApprove],
+    [state.threadId, state.assistantId, state.autoApprove, state.selectedModel, state.planMode],
   );
 
   const decideApproval = useCallback(
@@ -1351,6 +1545,138 @@ export function ChatProvider({ children }: ChatProviderProps) {
                       },
                     });
                   }
+                } else if (currentEvent === "tool_progress") {
+                  const msg = data.message || `Executing ${data.toolName || "tool"}...`;
+                  dispatch({
+                    type: "SET_STATUS",
+                    payload: { status: "executing", message: msg },
+                  });
+
+                // ── Plan execution SSE events (decideApproval) ──
+                } else if (currentEvent === "plan_created") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "planning" });
+
+                } else if (currentEvent === "plan_approval_requested") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "reviewing" });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-approval-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planApproval: {
+                        planPath: data.plan_path || data.planPath || "",
+                        planContent:
+                          data.plan_content || data.planContent || "",
+                        summary: data.summary || "",
+                        stepCount: data.step_count || data.stepCount || 0,
+                        checkpointCount:
+                          data.checkpoint_count || data.checkpointCount || 0,
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_approved") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "executing" });
+
+                } else if (currentEvent === "plan_rejected") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "idle" });
+
+                } else if (currentEvent === "plan_step_started") {
+                  dispatch({
+                    type: "SET_PLAN_PROGRESS",
+                    payload: {
+                      currentStep:
+                        data.step_number || data.stepNumber || 0,
+                      totalSteps: data.total_steps || data.totalSteps || 0,
+                      description: data.description || "",
+                    },
+                  });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-step-${data.step_number || data.stepNumber}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planProgress: {
+                        currentStep:
+                          data.step_number || data.stepNumber || 0,
+                        totalSteps:
+                          data.total_steps || data.totalSteps || 0,
+                        description: data.description || "",
+                        status: "running" as const,
+                        steps: [],
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_step_completed") {
+                  const stepNum =
+                    data.step_number || data.stepNumber || 0;
+                  const existingMsgId = `plan-step-${stepNum}`;
+                  const existingMsg = messagesRef.current.find(
+                    (m) => m.id === existingMsgId,
+                  );
+                  if (existingMsg) {
+                    dispatch({
+                      type: "UPDATE_MESSAGE",
+                      payload: {
+                        id: existingMsgId,
+                        updates: {
+                          planProgress: {
+                            currentStep: stepNum,
+                            totalSteps:
+                              data.total_steps || data.totalSteps || 0,
+                            description: data.description || "",
+                            status: data.success
+                              ? ("completed" as const)
+                              : ("failed" as const),
+                            steps: [],
+                          },
+                        },
+                      },
+                    });
+                  }
+
+                } else if (currentEvent === "plan_checkpoint") {
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-checkpoint-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planCheckpoint: {
+                        stepNumber:
+                          data.step_number || data.stepNumber || 0,
+                        passed: data.validation_result?.passed ?? true,
+                        summary: data.validation_result?.summary || "",
+                      },
+                    },
+                  });
+
+                } else if (currentEvent === "plan_execution_completed") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "complete" });
+                  dispatch({ type: "SET_PLAN_PROGRESS", payload: null });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-summary-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planSummary: {
+                        success: data.success ?? true,
+                        stepsCompleted:
+                          data.steps_completed || data.stepsCompleted || 0,
+                        totalSteps:
+                          data.total_steps || data.totalSteps || 0,
+                      },
+                    },
+                  });
+
                 } else if (currentEvent === "done") {
                   dispatch({
                     type: "SET_STATUS",
@@ -1380,6 +1706,226 @@ export function ChatProvider({ children }: ChatProviderProps) {
           type: "SET_STATUS",
           payload: { status: null, message: null },
         });
+      }
+    },
+    [state.threadId, state.assistantId],
+  );
+
+  const decidePlanApproval = useCallback(
+    async (decision: "approve" | "reject", reason?: string) => {
+      if (!state.threadId) return;
+
+      dispatch({ type: "SET_LOADING", payload: true });
+
+      try {
+        const response = await fetch("/api/chat/resume-stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            threadId: state.threadId,
+            assistantId: state.assistantId,
+            planDecision: decision,
+            planRejectReason: reason || "",
+          }),
+        });
+
+        if (!response.ok || !response.body) {
+          dispatch({ type: "SET_LOADING", payload: false });
+          return;
+        }
+
+        // Process the SSE response using the same pattern as decideApproval
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let currentEvent = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7);
+            } else if (line.startsWith("data: ") && currentEvent) {
+              try {
+                const data = JSON.parse(line.slice(6));
+
+                if (currentEvent === "text_delta" && data.text) {
+                  // Handle streaming text from the agent after plan decision
+                  const streamingMsgId = `plan-execution-text-${state.threadId}`;
+                  const existing = messagesRef.current.find(
+                    (m) => m.id === streamingMsgId,
+                  );
+                  if (existing) {
+                    dispatch({
+                      type: "APPEND_TO_MESSAGE",
+                      payload: {
+                        id: streamingMsgId,
+                        text: data.text,
+                      },
+                    });
+                  } else {
+                    dispatch({
+                      type: "ADD_MESSAGE",
+                      payload: {
+                        id: streamingMsgId,
+                        role: "assistant",
+                        content: data.text,
+                        timestamp: new Date(),
+                      },
+                    });
+                  }
+                } else if (currentEvent === "plan_approved") {
+                  dispatch({
+                    type: "SET_PLAN_STATUS",
+                    payload: "executing",
+                  });
+                } else if (currentEvent === "plan_rejected") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "idle" });
+                } else if (currentEvent === "plan_step_started") {
+                  dispatch({
+                    type: "SET_PLAN_PROGRESS",
+                    payload: {
+                      currentStep: data.step_number || 0,
+                      totalSteps: data.total_steps || 0,
+                      description: data.description || "",
+                    },
+                  });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-step-${data.step_number}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planProgress: {
+                        currentStep: data.step_number || 0,
+                        totalSteps: data.total_steps || 0,
+                        description: data.description || "",
+                        status: "running" as const,
+                        steps: [],
+                      },
+                    },
+                  });
+                } else if (currentEvent === "plan_step_completed") {
+                  const stepNum = data.step_number || 0;
+                  dispatch({
+                    type: "UPDATE_MESSAGE",
+                    payload: {
+                      id: `plan-step-${stepNum}`,
+                      updates: {
+                        planProgress: {
+                          currentStep: stepNum,
+                          totalSteps: data.total_steps || 0,
+                          description: data.description || "",
+                          status: data.success
+                            ? ("completed" as const)
+                            : ("failed" as const),
+                          steps: [],
+                        },
+                      },
+                    },
+                  });
+                } else if (currentEvent === "plan_checkpoint") {
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-checkpoint-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planCheckpoint: {
+                        stepNumber: data.step_number || 0,
+                        passed: data.validation_result?.passed ?? true,
+                        summary: data.validation_result?.summary || "",
+                      },
+                    },
+                  });
+                } else if (currentEvent === "plan_execution_completed") {
+                  dispatch({ type: "SET_PLAN_STATUS", payload: "complete" });
+                  dispatch({ type: "SET_PLAN_PROGRESS", payload: null });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `plan-summary-${Date.now()}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      planSummary: {
+                        success: data.success ?? true,
+                        stepsCompleted: data.steps_completed || 0,
+                        totalSteps: data.total_steps || 0,
+                      },
+                    },
+                  });
+                } else if (currentEvent === "tool_call") {
+                  const statusMsg = formatStatusMessage(
+                    data.toolName,
+                    data.args,
+                  );
+                  dispatch({
+                    type: "SET_STATUS",
+                    payload: { status: "executing", message: statusMsg },
+                  });
+                  dispatch({
+                    type: "ADD_MESSAGE",
+                    payload: {
+                      id: `tool-${data.toolCallId}`,
+                      role: "system",
+                      content: "",
+                      timestamp: new Date(),
+                      cliContent: [
+                        {
+                          type: "tool-call",
+                          toolName: data.toolName,
+                          args: data.args,
+                          content: "",
+                          status: "pending" as const,
+                        },
+                      ],
+                    },
+                  });
+                } else if (currentEvent === "tool_result") {
+                  const output = data.output || "";
+                  const cli: CLIContent[] = [
+                    {
+                      type: "tool-call",
+                      toolName: data.toolName,
+                      args: data.args || {},
+                      content: output,
+                      status:
+                        data.status === "success"
+                          ? ("success" as const)
+                          : ("error" as const),
+                      error: data.error,
+                    },
+                  ];
+                  dispatch({
+                    type: "UPDATE_MESSAGE",
+                    payload: {
+                      id: `tool-${data.toolCallId}`,
+                      updates: { cliContent: cli },
+                    },
+                  });
+                } else if (currentEvent === "done") {
+                  dispatch({ type: "SET_LOADING", payload: false });
+                }
+              } catch {
+                // ignore JSON parse errors
+              }
+              currentEvent = "";
+            }
+          }
+        }
+      } catch (error) {
+        console.error("[Chat] Plan approval error:", error);
+      } finally {
+        dispatch({ type: "SET_LOADING", payload: false });
       }
     },
     [state.threadId, state.assistantId],
@@ -1427,9 +1973,23 @@ export function ChatProvider({ children }: ChatProviderProps) {
         }
       }
       dispatch({ type: "SET_SELECTED_MODEL", payload: model });
+
+      // Fire-and-forget: sync model selection to the gateway
+      const provider = deriveProvider(model);
+      fetch("/api/ag3nt/gateway/model/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model }),
+      }).catch(() => {
+        // Gateway may be unreachable — silently ignore
+      });
     },
     [state.selectedModel],
   );
+
+  const setPlanMode = useCallback((enabled: boolean) => {
+    dispatch({ type: "SET_PLAN_MODE", payload: enabled });
+  }, []);
 
   const stopAgent = useCallback(() => {
     if (abortControllerRef.current) {
@@ -1557,11 +2117,13 @@ export function ChatProvider({ children }: ChatProviderProps) {
     ...state,
     sendMessage,
     decideApproval,
+    decidePlanApproval,
     clearMessages,
     setLoading,
     setError,
     setAutoApprove,
     setSelectedModel,
+    setPlanMode,
     stopAgent,
     clearCachesAndRestart,
     loadThreads,
@@ -1573,11 +2135,13 @@ export function ChatProvider({ children }: ChatProviderProps) {
     state,
     sendMessage,
     decideApproval,
+    decidePlanApproval,
     clearMessages,
     setLoading,
     setError,
     setAutoApprove,
     setSelectedModel,
+    setPlanMode,
     stopAgent,
     clearCachesAndRestart,
     loadThreads,

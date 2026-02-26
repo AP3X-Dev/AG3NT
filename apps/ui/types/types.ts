@@ -25,6 +25,31 @@ export interface Message {
   fileMentions?: FileMentionData[];
   // Agent approval (human-in-the-loop)
   approvalRequest?: ApprovalRequest;
+  // Plan execution fields
+  planApproval?: {
+    planPath: string;
+    planContent: string;
+    summary: string;
+    stepCount: number;
+    checkpointCount: number;
+  };
+  planProgress?: {
+    currentStep: number;
+    totalSteps: number;
+    description: string;
+    status: "running" | "completed" | "failed";
+    steps: Array<{ number: number; description: string; status: string }>;
+  };
+  planCheckpoint?: {
+    stepNumber: number;
+    passed: boolean;
+    summary: string;
+  };
+  planSummary?: {
+    success: boolean;
+    stepsCompleted: number;
+    totalSteps: number;
+  };
 }
 
 // CLI content types for messages
