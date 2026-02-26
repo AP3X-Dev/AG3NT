@@ -30,6 +30,7 @@ Categories
 
 from __future__ import annotations
 
+import types
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,12 +51,14 @@ class EventDef:
         Short human-readable explanation of when this event fires.
     schema:
         Optional mapping of *required* payload keys to their expected Python
-        types.  Used by :meth:`validate` for lightweight runtime checks.
+        types.  Stored as a :class:`types.MappingProxyType` to preserve
+        hashability of the frozen dataclass.  Used by :meth:`validate` for
+        lightweight runtime checks.
     """
 
     name: str
     description: str = ""
-    schema: dict[str, type] | None = None
+    schema: types.MappingProxyType | None = None
 
     def validate(self, payload: dict[str, Any]) -> bool:
         """Return ``True`` if *payload* satisfies this event's schema.
@@ -74,6 +77,21 @@ class EventDef:
                 return False
         return True
 
+    def __hash__(self) -> int:
+        """Hash by *name* only.
+
+        ``MappingProxyType`` is not inherently hashable (it delegates to
+        the underlying dict), so the auto-generated frozen-dataclass hash
+        would fail.  Since event names are unique module-level constants,
+        hashing by name alone is both correct and sufficient.
+        """
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, EventDef):
+            return NotImplemented
+        return self.name == other.name
+
     def __repr__(self) -> str:  # pragma: no cover
         return f"EventDef({self.name!r})"
 
@@ -85,22 +103,22 @@ class EventDef:
 SESSION_CREATED = EventDef(
     name="SESSION_CREATED",
     description="A new agent session has been created.",
-    schema={"session_id": str},
+    schema=types.MappingProxyType({"session_id": str}),
 )
 SESSION_UPDATED = EventDef(
     name="SESSION_UPDATED",
     description="An existing session's metadata was updated.",
-    schema={"session_id": str},
+    schema=types.MappingProxyType({"session_id": str}),
 )
 SESSION_ARCHIVED = EventDef(
     name="SESSION_ARCHIVED",
     description="A session was archived (soft-deleted).",
-    schema={"session_id": str},
+    schema=types.MappingProxyType({"session_id": str}),
 )
 SESSION_RESTORED = EventDef(
     name="SESSION_RESTORED",
     description="An archived session was restored.",
-    schema={"session_id": str},
+    schema=types.MappingProxyType({"session_id": str}),
 )
 
 # =========================================================================
@@ -110,12 +128,12 @@ SESSION_RESTORED = EventDef(
 MESSAGE_SENT = EventDef(
     name="MESSAGE_SENT",
     description="A complete message was sent (user or assistant).",
-    schema={"session_id": str, "role": str},
+    schema=types.MappingProxyType({"session_id": str, "role": str}),
 )
 MESSAGE_PART_UPDATED = EventDef(
     name="MESSAGE_PART_UPDATED",
     description="A streaming message part was updated.",
-    schema={"session_id": str},
+    schema=types.MappingProxyType({"session_id": str}),
 )
 
 # =========================================================================
@@ -125,27 +143,12 @@ MESSAGE_PART_UPDATED = EventDef(
 TOOL_CALLED = EventDef(
     name="TOOL_CALLED",
     description="A tool invocation was initiated.",
-    schema={"tool_name": str, "arguments": dict},
+    schema=types.MappingProxyType({"tool_name": str, "arguments": dict}),
 )
 TOOL_COMPLETED = EventDef(
     name="TOOL_COMPLETED",
     description="A tool invocation finished (success or failure).",
-    schema={"tool_name": str, "success": bool, "duration_ms": int},
-)
-TOOL_APPROVAL_REQUESTED = EventDef(
-    name="TOOL_APPROVAL_REQUESTED",
-    description="A tool invocation requires human approval before executing.",
-    schema={"tool_name": str},
-)
-TOOL_APPROVAL_GRANTED = EventDef(
-    name="TOOL_APPROVAL_GRANTED",
-    description="Human approved a pending tool invocation.",
-    schema={"tool_name": str},
-)
-TOOL_APPROVAL_DENIED = EventDef(
-    name="TOOL_APPROVAL_DENIED",
-    description="Human denied a pending tool invocation.",
-    schema={"tool_name": str},
+    schema=types.MappingProxyType({"tool_name": str, "success": bool, "duration_ms": int}),
 )
 
 # =========================================================================
@@ -155,32 +158,32 @@ TOOL_APPROVAL_DENIED = EventDef(
 FILE_WRITTEN = EventDef(
     name="FILE_WRITTEN",
     description="A file was written by the agent.",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 FILE_EDITED = EventDef(
     name="FILE_EDITED",
     description="An existing file was edited by the agent.",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 FILE_DELETED = EventDef(
     name="FILE_DELETED",
     description="A file was deleted by the agent.",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 FILE_EXTERNAL_CREATED = EventDef(
     name="FILE_EXTERNAL_CREATED",
     description="A file was created outside the agent (detected by watcher).",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 FILE_EXTERNAL_MODIFIED = EventDef(
     name="FILE_EXTERNAL_MODIFIED",
     description="A file was modified outside the agent (detected by watcher).",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 FILE_EXTERNAL_DELETED = EventDef(
     name="FILE_EXTERNAL_DELETED",
     description="A file was deleted outside the agent (detected by watcher).",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 
 # =========================================================================
@@ -190,22 +193,22 @@ FILE_EXTERNAL_DELETED = EventDef(
 PROVIDER_ERROR = EventDef(
     name="PROVIDER_ERROR",
     description="An LLM provider returned an error.",
-    schema={"provider": str, "error": str},
+    schema=types.MappingProxyType({"provider": str, "error": str}),
 )
 PROVIDER_RESPONSE = EventDef(
     name="PROVIDER_RESPONSE",
     description="An LLM provider returned a successful response.",
-    schema={"provider": str, "latency_ms": int},
+    schema=types.MappingProxyType({"provider": str, "latency_ms": int}),
 )
 PROVIDER_FAILOVER = EventDef(
     name="PROVIDER_FAILOVER",
     description="Traffic was failed over to a backup LLM provider.",
-    schema={"from_provider": str, "to_provider": str},
+    schema=types.MappingProxyType({"from_provider": str, "to_provider": str}),
 )
 PROVIDER_RATE_LIMITED = EventDef(
     name="PROVIDER_RATE_LIMITED",
     description="An LLM provider rate-limited the request.",
-    schema={"provider": str},
+    schema=types.MappingProxyType({"provider": str}),
 )
 
 # =========================================================================
@@ -215,32 +218,32 @@ PROVIDER_RATE_LIMITED = EventDef(
 QUALITY_CHECK_STARTED = EventDef(
     name="QUALITY_CHECK_STARTED",
     description="A quality check (lint, type-check, test) was started.",
-    schema={"check_type": str},
+    schema=types.MappingProxyType({"check_type": str}),
 )
 QUALITY_CHECK_PASSED = EventDef(
     name="QUALITY_CHECK_PASSED",
     description="A quality check passed.",
-    schema={"check_type": str},
+    schema=types.MappingProxyType({"check_type": str}),
 )
 QUALITY_CHECK_FAILED = EventDef(
     name="QUALITY_CHECK_FAILED",
     description="A quality check failed.",
-    schema={"check_type": str, "error_count": int},
+    schema=types.MappingProxyType({"check_type": str, "error_count": int}),
 )
 QUALITY_FIX_APPLIED = EventDef(
     name="QUALITY_FIX_APPLIED",
     description="An automatic quality fix was applied.",
-    schema={"check_type": str, "fix_description": str},
+    schema=types.MappingProxyType({"check_type": str, "fix_description": str}),
 )
 QUALITY_HEALTH_UPDATED = EventDef(
     name="QUALITY_HEALTH_UPDATED",
     description="The overall quality health score was recalculated.",
-    schema={"score": float},
+    schema=types.MappingProxyType({"score": float}),
 )
 QUALITY_DEGRADATION_ALERT = EventDef(
     name="QUALITY_DEGRADATION_ALERT",
     description="Quality score dropped below threshold.",
-    schema={"score": float, "threshold": float},
+    schema=types.MappingProxyType({"score": float, "threshold": float}),
 )
 
 # =========================================================================
@@ -250,17 +253,17 @@ QUALITY_DEGRADATION_ALERT = EventDef(
 APPROVAL_REQUESTED = EventDef(
     name="APPROVAL_REQUESTED",
     description="Human approval was requested for an action.",
-    schema={"action": str},
+    schema=types.MappingProxyType({"action": str}),
 )
 APPROVAL_GRANTED = EventDef(
     name="APPROVAL_GRANTED",
     description="Human granted approval.",
-    schema={"action": str},
+    schema=types.MappingProxyType({"action": str}),
 )
 APPROVAL_DENIED = EventDef(
     name="APPROVAL_DENIED",
     description="Human denied approval.",
-    schema={"action": str},
+    schema=types.MappingProxyType({"action": str}),
 )
 
 # =========================================================================
@@ -270,37 +273,37 @@ APPROVAL_DENIED = EventDef(
 PLAN_CREATED = EventDef(
     name="PLAN_CREATED",
     description="A new execution plan was created.",
-    schema={"plan_id": str},
+    schema=types.MappingProxyType({"plan_id": str}),
 )
 PLAN_APPROVAL_REQUESTED = EventDef(
     name="PLAN_APPROVAL_REQUESTED",
     description="A plan requires human approval before execution.",
-    schema={"plan_id": str},
+    schema=types.MappingProxyType({"plan_id": str}),
 )
 PLAN_APPROVED = EventDef(
     name="PLAN_APPROVED",
     description="A plan was approved for execution.",
-    schema={"plan_id": str},
+    schema=types.MappingProxyType({"plan_id": str}),
 )
 PLAN_REJECTED = EventDef(
     name="PLAN_REJECTED",
     description="A plan was rejected by the user.",
-    schema={"plan_id": str},
+    schema=types.MappingProxyType({"plan_id": str}),
 )
 PLAN_STEP_STARTED = EventDef(
     name="PLAN_STEP_STARTED",
     description="A plan step began executing.",
-    schema={"plan_id": str, "step_index": int},
+    schema=types.MappingProxyType({"plan_id": str, "step_index": int}),
 )
 PLAN_STEP_COMPLETED = EventDef(
     name="PLAN_STEP_COMPLETED",
     description="A plan step finished executing.",
-    schema={"plan_id": str, "step_index": int, "success": bool},
+    schema=types.MappingProxyType({"plan_id": str, "step_index": int, "success": bool}),
 )
 PLAN_COMPLETED = EventDef(
     name="PLAN_COMPLETED",
     description="All plan steps have been executed.",
-    schema={"plan_id": str, "success": bool},
+    schema=types.MappingProxyType({"plan_id": str, "success": bool}),
 )
 
 # =========================================================================
@@ -310,22 +313,22 @@ PLAN_COMPLETED = EventDef(
 MCP_CONNECTED = EventDef(
     name="MCP_CONNECTED",
     description="An MCP server connection was established.",
-    schema={"server_name": str},
+    schema=types.MappingProxyType({"server_name": str}),
 )
 MCP_DISCONNECTED = EventDef(
     name="MCP_DISCONNECTED",
     description="An MCP server connection was lost.",
-    schema={"server_name": str},
+    schema=types.MappingProxyType({"server_name": str}),
 )
 MCP_HEALTH_CHECK = EventDef(
     name="MCP_HEALTH_CHECK",
     description="An MCP server health check completed.",
-    schema={"server_name": str, "healthy": bool},
+    schema=types.MappingProxyType({"server_name": str, "healthy": bool}),
 )
 MCP_TOOL_DISCOVERED = EventDef(
     name="MCP_TOOL_DISCOVERED",
     description="A new tool was discovered from an MCP server.",
-    schema={"server_name": str, "tool_name": str},
+    schema=types.MappingProxyType({"server_name": str, "tool_name": str}),
 )
 
 # =========================================================================
@@ -335,17 +338,17 @@ MCP_TOOL_DISCOVERED = EventDef(
 LSP_DIAGNOSTICS = EventDef(
     name="LSP_DIAGNOSTICS",
     description="LSP diagnostics (errors/warnings) were received.",
-    schema={"file_path": str, "diagnostic_count": int},
+    schema=types.MappingProxyType({"file_path": str, "diagnostic_count": int}),
 )
 LSP_SERVER_STARTED = EventDef(
     name="LSP_SERVER_STARTED",
     description="An LSP server process was started.",
-    schema={"language": str},
+    schema=types.MappingProxyType({"language": str}),
 )
 LSP_SERVER_CRASHED = EventDef(
     name="LSP_SERVER_CRASHED",
     description="An LSP server process crashed unexpectedly.",
-    schema={"language": str, "exit_code": int},
+    schema=types.MappingProxyType({"language": str, "exit_code": int}),
 )
 
 # =========================================================================
@@ -355,12 +358,12 @@ LSP_SERVER_CRASHED = EventDef(
 SENTINEL_INDEXED = EventDef(
     name="SENTINEL_INDEXED",
     description="A file was indexed by the Sentinel knowledge graph.",
-    schema={"path": str},
+    schema=types.MappingProxyType({"path": str}),
 )
 SENTINEL_SYMBOLS_CHANGED = EventDef(
     name="SENTINEL_SYMBOLS_CHANGED",
     description="Symbol definitions changed in the knowledge graph.",
-    schema={"path": str, "symbols_added": int, "symbols_removed": int},
+    schema=types.MappingProxyType({"path": str, "symbols_added": int, "symbols_removed": int}),
 )
 SENTINEL_REINDEX_REQUESTED = EventDef(
     name="SENTINEL_REINDEX_REQUESTED",
@@ -374,22 +377,22 @@ SENTINEL_REINDEX_REQUESTED = EventDef(
 AUTOFIX_STARTED = EventDef(
     name="AUTOFIX_STARTED",
     description="The autofix pipeline started processing an issue.",
-    schema={"issue_id": str},
+    schema=types.MappingProxyType({"issue_id": str}),
 )
 AUTOFIX_COMPLETED = EventDef(
     name="AUTOFIX_COMPLETED",
     description="The autofix pipeline successfully fixed an issue.",
-    schema={"issue_id": str, "fix_description": str},
+    schema=types.MappingProxyType({"issue_id": str, "fix_description": str}),
 )
 AUTOFIX_FAILED = EventDef(
     name="AUTOFIX_FAILED",
     description="The autofix pipeline failed to fix an issue.",
-    schema={"issue_id": str, "reason": str},
+    schema=types.MappingProxyType({"issue_id": str, "reason": str}),
 )
 AUTOFIX_STAGE_ENTERED = EventDef(
     name="AUTOFIX_STAGE_ENTERED",
     description="The autofix pipeline entered a new stage.",
-    schema={"issue_id": str, "stage": str},
+    schema=types.MappingProxyType({"issue_id": str, "stage": str}),
 )
 
 # =========================================================================
@@ -399,22 +402,22 @@ AUTOFIX_STAGE_ENTERED = EventDef(
 RECOVERY_STARTED = EventDef(
     name="RECOVERY_STARTED",
     description="A self-healing recovery sequence was initiated.",
-    schema={"level": int},
+    schema=types.MappingProxyType({"level": int}),
 )
 RECOVERY_SUCCEEDED = EventDef(
     name="RECOVERY_SUCCEEDED",
     description="A recovery action succeeded.",
-    schema={"level": int},
+    schema=types.MappingProxyType({"level": int}),
 )
 RECOVERY_FAILED = EventDef(
     name="RECOVERY_FAILED",
     description="A recovery action at the current level failed.",
-    schema={"level": int, "error": str},
+    schema=types.MappingProxyType({"level": int, "error": str}),
 )
 RECOVERY_ESCALATED = EventDef(
     name="RECOVERY_ESCALATED",
     description="Recovery was escalated to a higher level.",
-    schema={"from_level": int, "to_level": int},
+    schema=types.MappingProxyType({"from_level": int, "to_level": int}),
 )
 
 # =========================================================================
@@ -428,12 +431,12 @@ META_TICK = EventDef(
 META_STATUS_HINT = EventDef(
     name="META_STATUS_HINT",
     description="The meta-loop emitted a status hint for the UI.",
-    schema={"hint": str},
+    schema=types.MappingProxyType({"hint": str}),
 )
 META_RUNAWAY = EventDef(
     name="META_RUNAWAY",
     description="A runaway loop was detected and halted.",
-    schema={"loop_name": str, "iterations": int},
+    schema=types.MappingProxyType({"loop_name": str, "iterations": int}),
 )
 
 # =========================================================================
@@ -443,17 +446,17 @@ META_RUNAWAY = EventDef(
 HOOK_REGISTERED = EventDef(
     name="HOOK_REGISTERED",
     description="A new phase hook was registered.",
-    schema={"hook_id": str, "phase": str},
+    schema=types.MappingProxyType({"hook_id": str, "phase": str}),
 )
 HOOK_CANCELLED = EventDef(
     name="HOOK_CANCELLED",
     description="A phase hook was cancelled.",
-    schema={"hook_id": str},
+    schema=types.MappingProxyType({"hook_id": str}),
 )
 HOOK_FIRED = EventDef(
     name="HOOK_FIRED",
     description="A phase hook was invoked.",
-    schema={"hook_id": str, "phase": str},
+    schema=types.MappingProxyType({"hook_id": str, "phase": str}),
 )
 
 # =========================================================================
@@ -467,7 +470,7 @@ HEARTBEAT_TICK = EventDef(
 CRON_JOB_FIRED = EventDef(
     name="CRON_JOB_FIRED",
     description="A scheduled cron job was triggered.",
-    schema={"job_name": str},
+    schema=types.MappingProxyType({"job_name": str}),
 )
 
 # =========================================================================
@@ -477,7 +480,7 @@ CRON_JOB_FIRED = EventDef(
 AGENT_ERROR = EventDef(
     name="AGENT_ERROR",
     description="The agent encountered an unhandled error.",
-    schema={"error": str},
+    schema=types.MappingProxyType({"error": str}),
 )
 AGENT_EMPTY_RESPONSE = EventDef(
     name="AGENT_EMPTY_RESPONSE",
@@ -499,17 +502,17 @@ AGENT_STOPPED = EventDef(
 SECURITY_ANOMALY = EventDef(
     name="SECURITY_ANOMALY",
     description="A security anomaly was detected (e.g. suspicious file access).",
-    schema={"anomaly_type": str, "details": str},
+    schema=types.MappingProxyType({"anomaly_type": str, "details": str}),
 )
 SECURITY_ESCALATION = EventDef(
     name="SECURITY_ESCALATION",
     description="A security issue was escalated for human review.",
-    schema={"anomaly_type": str, "severity": str},
+    schema=types.MappingProxyType({"anomaly_type": str, "severity": str}),
 )
 SECURITY_POLICY_VIOLATION = EventDef(
     name="SECURITY_POLICY_VIOLATION",
     description="A security policy violation was detected.",
-    schema={"policy": str, "action": str},
+    schema=types.MappingProxyType({"policy": str, "action": str}),
 )
 
 # =========================================================================
@@ -519,12 +522,12 @@ SECURITY_POLICY_VIOLATION = EventDef(
 SNAPSHOT_CREATED = EventDef(
     name="SNAPSHOT_CREATED",
     description="A filesystem snapshot was created.",
-    schema={"snapshot_id": str},
+    schema=types.MappingProxyType({"snapshot_id": str}),
 )
 SNAPSHOT_RESTORED = EventDef(
     name="SNAPSHOT_RESTORED",
     description="A filesystem snapshot was restored.",
-    schema={"snapshot_id": str},
+    schema=types.MappingProxyType({"snapshot_id": str}),
 )
 
 # =========================================================================
@@ -534,17 +537,17 @@ SNAPSHOT_RESTORED = EventDef(
 SUBAGENT_SPAWNED = EventDef(
     name="SUBAGENT_SPAWNED",
     description="A sub-agent was spawned for parallel work.",
-    schema={"subagent_id": str, "task": str},
+    schema=types.MappingProxyType({"subagent_id": str, "task": str}),
 )
 SUBAGENT_COMPLETED = EventDef(
     name="SUBAGENT_COMPLETED",
     description="A sub-agent completed its task.",
-    schema={"subagent_id": str, "success": bool},
+    schema=types.MappingProxyType({"subagent_id": str, "success": bool}),
 )
 SUBAGENT_FAILED = EventDef(
     name="SUBAGENT_FAILED",
     description="A sub-agent failed its task.",
-    schema={"subagent_id": str, "error": str},
+    schema=types.MappingProxyType({"subagent_id": str, "error": str}),
 )
 
 # =========================================================================
@@ -554,7 +557,7 @@ SUBAGENT_FAILED = EventDef(
 CONTEXT_COMPACTED = EventDef(
     name="CONTEXT_COMPACTED",
     description="The conversation context was compacted to reduce token usage.",
-    schema={"tokens_before": int, "tokens_after": int},
+    schema=types.MappingProxyType({"tokens_before": int, "tokens_after": int}),
 )
 CONTEXT_MEMORY_FLUSHED = EventDef(
     name="CONTEXT_MEMORY_FLUSHED",
@@ -565,6 +568,8 @@ CONTEXT_MEMORY_FLUSHED = EventDef(
 # ALL_EVENTS registry
 # =========================================================================
 
+# WARNING: ALL_EVENTS must remain the LAST statement in this module.
+# Any EventDef defined after this line will not be registered.
 ALL_EVENTS: dict[str, EventDef] = {
     v.name: v
     for k, v in globals().items()
