@@ -9,6 +9,7 @@ Central event routing system that:
 """
 
 import asyncio
+import fnmatch
 import hashlib
 import logging
 from collections import defaultdict
@@ -158,6 +159,7 @@ class EventBus:
         self._subscriptions: dict[str, Subscription] = {}
         self._handlers_by_type: dict[str, list[Subscription]] = defaultdict(list)
         self._global_handlers: list[Subscription] = []
+        self._pattern_handlers: dict[str, list[Subscription]] = defaultdict(list)
 
         # Deduplication cache: dedup_key -> expiry_time
         self._dedup_cache: dict[str, datetime] = {}
@@ -251,6 +253,41 @@ class EventBus:
 
         return subscription.subscription_id
 
+    def subscribe_pattern(
+        self,
+        pattern: str,
+        handler: EventHandler,
+        priority_filter: Optional[EventPriority] = None,
+        source_filter: Optional[str] = None,
+    ) -> str:
+        """
+        Subscribe to events matching a glob pattern (e.g., 'file.*').
+
+        Uses fnmatch-style glob matching so 'file.*' matches 'file.written',
+        'file.deleted', etc. but not 'tool.called'.
+
+        Args:
+            pattern: fnmatch glob pattern for event types
+            handler: Async or sync callable to handle events
+            priority_filter: Only handle events of this priority or higher
+            source_filter: Only handle events from this source
+
+        Returns:
+            Subscription ID for unsubscribing
+        """
+        sub_id = str(uuid4())
+        sub = Subscription(
+            subscription_id=sub_id,
+            handler=handler,
+            event_types={pattern},
+            priority_filter=priority_filter,
+            source_filter=source_filter,
+        )
+        self._pattern_handlers[pattern].append(sub)
+        self._subscriptions[sub_id] = sub
+        logger.debug(f"Subscribed pattern handler {sub_id} for pattern: {pattern}")
+        return sub_id
+
     def unsubscribe(self, subscription_id: str) -> bool:
         """
         Unsubscribe a handler.
@@ -274,6 +311,16 @@ class EventBus:
                 s for s in self._handlers_by_type[event_type]
                 if s.subscription_id != subscription_id
             ]
+
+        # Remove from pattern handlers
+        for pattern in list(self._pattern_handlers.keys()):
+            self._pattern_handlers[pattern] = [
+                s for s in self._pattern_handlers[pattern]
+                if s.subscription_id != subscription_id
+            ]
+            # Clean up empty pattern lists
+            if not self._pattern_handlers[pattern]:
+                del self._pattern_handlers[pattern]
 
         logger.debug(f"Unsubscribed handler {subscription_id}")
         return True
@@ -311,6 +358,24 @@ class EventBus:
         except asyncio.QueueFull:
             logger.warning(f"Event queue full, dropping event: {event.event_id}")
             return False
+
+    def emit_sync(self, event: Event) -> None:
+        """
+        Fire-and-forget event emission from synchronous code.
+
+        Enqueues the event without awaiting. Use from sync contexts
+        (e.g., tool wrappers, middleware). Unlike publish(), this skips
+        deduplication to keep the call non-async and fast.
+
+        Args:
+            event: The event to enqueue
+        """
+        try:
+            self._seq += 1
+            self._queue.put_nowait((event.priority.value, self._seq, event))
+            self._metrics["events_received"] += 1
+        except asyncio.QueueFull:
+            logger.warning("Event queue full, dropping event: %s", event.event_type)
 
     def _is_duplicate(self, event: Event) -> bool:
         """Check if event is a duplicate within the dedup window."""
@@ -354,6 +419,11 @@ class EventBus:
 
         # Type-specific handlers
         handlers.extend(self._handlers_by_type.get(event.event_type, []))
+
+        # Pattern-matched handlers
+        for pattern, subs in self._pattern_handlers.items():
+            if fnmatch.fnmatch(event.event_type, pattern):
+                handlers.extend(subs)
 
         # Global handlers
         handlers.extend(self._global_handlers)
@@ -437,6 +507,25 @@ class EventBus:
             "subscriptions": len(self._subscriptions),
             "dlq_size": len(self._dlq),
             "dedup_cache_size": len(self._dedup_cache)
+        }
+
+    def health_report(self) -> dict:
+        """
+        Return a health report compatible with MetaLoop monitoring.
+
+        Provides a snapshot of bus state for the ONI dashboard
+        and MetaLoop health checks.
+        """
+        metrics = self.get_metrics()
+        return {
+            "subscription_count": len(self._subscriptions),
+            "pattern_subscription_count": sum(
+                len(v) for v in self._pattern_handlers.values()
+            ),
+            "dispatch_rate": metrics["events_processed"],
+            "dlq_size": metrics["dlq_size"],
+            "queue_size": metrics["queue_size"],
+            "dedup_cache_size": metrics["dedup_cache_size"],
         }
 
     def get_dlq(self, limit: int = 100) -> list[dict]:
