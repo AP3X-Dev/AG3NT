@@ -100,9 +100,12 @@ from ag3nt_agent.context_summarization import (
     get_default_summarization_config,
 )
 from ag3nt_agent.interactive_tools import get_interactive_tools
+from ag3nt_agent.identity import IdentityLoader
+from ag3nt_agent.memory_search import search_memory
 from ag3nt_agent.planning_middleware import PlanningMiddleware
 from ag3nt_agent.shell_middleware import ShellMiddleware
 from ag3nt_agent.skill_trigger_middleware import SkillTriggerMiddleware
+from ag3nt_agent.turn_context_middleware import TurnContextMiddleware
 
 # =============================================================================
 # LANGCHAIN TRACING CONFIGURATION
@@ -1308,6 +1311,53 @@ Tips:
 - Size options: 1K (standard), 2K (higher), 4K (highest quality)
 - Images are saved to the workspace directory
 
+## Scheduling & Reminders
+
+You have a **schedule_reminder** tool that lets you schedule one-shot reminders and recurring cron jobs. Use it proactively when users mention time-based tasks.
+
+**One-shot reminders:**
+```python
+schedule_reminder(message="Check deployment status", when="in 30 minutes")
+schedule_reminder(message="Stand-up meeting", when="2025-01-15T09:00:00")
+```
+
+**Recurring cron jobs:**
+```python
+schedule_reminder(message="Tell me a joke", when="0 9 * * *")  # Daily at 9 AM
+schedule_reminder(message="Weekly code review summary", when="0 10 * * 1")  # Mondays at 10 AM
+```
+
+Parameters:
+- `message` — The text prompt the agent will process when the job fires
+- `when` — Relative time (e.g., "in 30 minutes", "in 2 hours"), ISO datetime, or cron expression
+- `channel` — Optional target channel (e.g., "telegram", "discord")
+
+When scheduling is set up, the result will be delivered back to the chat automatically. Proactively offer to schedule things when users mention deadlines, reminders, periodic tasks, or time-based workflows.
+
+## Background Monitoring
+
+Several autonomous systems run in the background to maintain code quality and system health:
+
+- **Quality Gates** — Automatically score code changes and flag regressions
+- **Self-Healing Recovery** — Detect and attempt to fix recurring errors and test failures
+- **Code Snapshots** — Periodic snapshots for rollback safety
+- **Security Monitoring** — Scan for vulnerabilities and unsafe patterns
+- **Compaction** — Manage context window size automatically
+
+You don't need to manage these directly — they run automatically. But you should know they exist so you can answer questions about them (e.g., "What background processes are running?" or "Is there a quality gate?").
+
+## Autonomous Intelligence
+
+Additional intelligence systems are active:
+
+- **Sentinel** — Monitors code quality scores and error patterns across sessions
+- **Quality Guardian** — Enforces quality thresholds before committing changes
+- **Predictive Intent** — Anticipates what the user might need next based on patterns
+- **Autofix Pipeline** — Automatically attempts to fix failing tests and lint errors
+- **PEVA Orchestration** — Plan-Execute-Verify-Adapt loop for complex multi-step tasks
+
+Reference these when relevant (e.g., "The quality guardian flagged a regression in module X" or "I notice recurring test failures that the autofix pipeline is tracking").
+
 ## Interactive Questions
 
 You can ask the user for clarification during execution using **ask_user**:
@@ -1524,10 +1574,15 @@ def _build_agent() -> CompiledStateGraph:
     # Build middleware list
     # Note: create_deep_agent already adds TodoListMiddleware internally
     # so we only add AG3NT-specific middleware here to avoid duplicates
+    turn_context_middleware = TurnContextMiddleware(
+        identity_loader=IdentityLoader(),
+        memory_search_fn=search_memory,
+    )
     planning_middleware = PlanningMiddleware(yolo_mode=_is_yolo_mode())
     skill_trigger_middleware = SkillTriggerMiddleware(planning_middleware=planning_middleware)
     middleware_list = [
-        planning_middleware,  # Plan mode enforcement (MUST be first)
+        turn_context_middleware,  # Identity + memory context (runs every turn)
+        planning_middleware,  # Plan mode enforcement
         shell_middleware,  # Shell execution capability
         skill_trigger_middleware,  # Skill trigger matching
     ]
@@ -2266,7 +2321,8 @@ async def start_autonomous_system(config: dict | None = None) -> dict:
     except Exception as exc:
         logger.error("Autonomous bootstrap: failed to create EventBus: %s", exc)
 
-    # ── 2. PhaseHookManager ──────────────────────────────────────────────
+    # ── 2. PhaseHookManager + safety hooks ─────────────────────────────
+    hook_manager = None
     try:
         from ag3nt_agent.hooks import PhaseHookManager
 
@@ -2274,6 +2330,14 @@ async def start_autonomous_system(config: dict | None = None) -> dict:
         hook_manager.start()
         runtime["hook_manager"] = hook_manager
         logger.info("Autonomous bootstrap: PhaseHookManager started")
+
+        # Register safety hooks (protect_core, block_danger, compile_check)
+        try:
+            from ag3nt_agent.hooks.safety import register_safety_hooks
+            register_safety_hooks(hook_manager)
+            logger.info("Autonomous bootstrap: safety hooks registered")
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: safety hooks unavailable: %s", exc)
     except Exception as exc:
         logger.warning("Autonomous bootstrap: PhaseHookManager unavailable: %s", exc)
 
@@ -2294,6 +2358,18 @@ async def start_autonomous_system(config: dict | None = None) -> dict:
             logger.info("Autonomous bootstrap: LoopManager started (%s)", loop_manager.loop_names)
         except Exception as exc:
             logger.warning("Autonomous bootstrap: LoopManager unavailable: %s", exc)
+
+    # ── 3b. AutofixEngine ──────────────────────────────────────────────
+    if bus is not None:
+        try:
+            from ag3nt_agent.autofix.engine import AutofixEngine
+
+            autofix_engine = AutofixEngine(bus)
+            await autofix_engine.start()
+            runtime["autofix_engine"] = autofix_engine
+            logger.info("Autonomous bootstrap: AutofixEngine started")
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: AutofixEngine unavailable: %s", exc)
 
     # ── 4. IntelligenceWorker (daemon thread) ────────────────────────────
     intel_cfg = cfg.get("intelligence", {})
@@ -2453,6 +2529,15 @@ async def stop_autonomous_system() -> None:
             logger.info("Autonomous shutdown: IntelligenceWorker stopped")
         except Exception as exc:
             logger.error("Autonomous shutdown: IntelligenceWorker error: %s", exc)
+
+    # ── 3b. AutofixEngine ───────────────────────────────────────────────
+    autofix_engine = runtime.get("autofix_engine")
+    if autofix_engine is not None:
+        try:
+            await autofix_engine.stop()
+            logger.info("Autonomous shutdown: AutofixEngine stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: AutofixEngine error: %s", exc)
 
     # ── 4. LoopManager ───────────────────────────────────────────────────
     loop_manager = runtime.get("loop_manager")
