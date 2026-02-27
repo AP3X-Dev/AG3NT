@@ -2347,11 +2347,12 @@ async def start_autonomous_system(config: dict | None = None) -> dict:
     # ── 1. EventBus ──────────────────────────────────────────────────────
     bus = None
     try:
-        from ag3nt_agent.autonomous.event_bus import EventBus
+        from ag3nt_agent.autonomous.event_bus import get_event_bus
 
-        bus = EventBus()
+        bus = get_event_bus()
+        await bus.start()
         runtime["event_bus"] = bus
-        logger.info("Autonomous bootstrap: EventBus created")
+        logger.info("Autonomous bootstrap: EventBus created and started")
     except Exception as exc:
         logger.error("Autonomous bootstrap: failed to create EventBus: %s", exc)
 
