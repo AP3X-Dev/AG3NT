@@ -1717,10 +1717,50 @@ def get_delivery_tracker() -> DeliveryTracker:
     return _global_delivery_tracker
 
 
+# =============================================================================
+# SUBAGENT MONITOR SINGLETON
+# =============================================================================
+
+# Module-level singleton
+_subagent_monitor: SubagentMonitor | None = None
+_monitor_lock = threading.Lock()
+
+
+def _default_log_callback(event: SubagentEvent) -> None:
+    """Log subagent lifecycle events."""
+    if event.event_type.value in ("completed", "failed", "timeout"):
+        logger.info(
+            "Subagent %s %s: %s (%.1fs, %d turns)",
+            event.subagent_type,
+            event.event_type.value,
+            event.execution_id,
+            event.data.get("duration_seconds", 0) or 0,
+            event.data.get("turns", 0),
+        )
+
+
+def get_subagent_monitor() -> SubagentMonitor:
+    """Get or create the global SubagentMonitor singleton.
+
+    Initializes with persistence at ~/.ag3nt/subagent_runs.json
+    and loads any previous run history.
+    """
+    global _subagent_monitor
+    if _subagent_monitor is None:
+        with _monitor_lock:
+            if _subagent_monitor is None:
+                _subagent_monitor = SubagentMonitor()
+                _subagent_monitor.load_from_disk()
+                _subagent_monitor.on_event(callback=_default_log_callback)
+    return _subagent_monitor
+
+
 def reset_global_instances() -> None:
     """Reset all global instances. Useful for testing."""
-    global _global_announce_queue, _global_cross_session_bus, _global_delivery_tracker
+    global _global_announce_queue, _global_cross_session_bus, _global_delivery_tracker, _subagent_monitor
     with _global_singleton_lock:
         _global_announce_queue = None
         _global_cross_session_bus = None
         _global_delivery_tracker = None
+    with _monitor_lock:
+        _subagent_monitor = None
