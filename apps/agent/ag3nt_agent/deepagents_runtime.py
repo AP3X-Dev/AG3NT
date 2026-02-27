@@ -173,6 +173,34 @@ _use_agent_pool: bool = os.environ.get("AG3NT_USE_AGENT_POOL", "false").lower() 
 # Set up logging for approval events
 logger = logging.getLogger("ag3nt.approval")
 
+def _emit_turn_completed(*, session_id: str, char_count: int) -> None:
+    """Emit turn.completed event to the EventBus for compaction tracking.
+
+    Non-blocking, fire-and-forget. Failures are logged and swallowed.
+    """
+    try:
+        import asyncio
+        from ag3nt_agent.autonomous.event_bus import EventBus, Event, EventPriority
+
+        event = Event(
+            event_type="turn.completed",
+            source="deepagents_runtime",
+            payload={"session_id": session_id, "char_count": char_count},
+            priority=EventPriority.LOW,
+        )
+        bus = EventBus()
+
+        # Publish async event from sync context
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish(event))
+        except RuntimeError:
+            # No running loop — create one for the publish
+            asyncio.run(bus.publish(event))
+    except Exception:
+        logger.debug("Failed to emit turn.completed event", exc_info=True)
+
+
 # =============================================================================
 # RISKY TOOL DEFINITIONS
 # =============================================================================
@@ -1925,6 +1953,12 @@ def run_turn(
 
     # Extract usage information from response metadata
     usage = _extract_usage_info(result)
+
+    # Emit turn.completed for compaction tracking
+    response_chars = len(response_text) + len(text)
+    for ev in events:
+        response_chars += len(str(ev.get("output", "")))
+    _emit_turn_completed(session_id=session_id, char_count=response_chars)
 
     return {
         "session_id": session_id,
