@@ -290,6 +290,7 @@ class BM25Index:
         self._avg_doc_length: float = 0.0
         self._doc_freqs: dict[str, int] = {}  # Term -> num docs containing term
         self._idf: dict[str, float] = {}
+        self._term_freqs: list[dict[str, int]] = []  # Per-doc term frequency maps
         self._initialized = False
 
     def _tokenize(self, text: str) -> list[str]:
@@ -302,22 +303,31 @@ class BM25Index:
     def build(self, documents: list[str]) -> None:
         """Build the BM25 index from documents.
 
+        Pre-computes per-document term frequency maps so that score()
+        can look up term counts in O(1) instead of rebuilding them.
+
         Args:
             documents: List of document texts to index
         """
         self._documents = []
         self._doc_lengths = []
         self._doc_freqs = {}
+        self._term_freqs = []
 
-        # Tokenize and compute document frequencies
+        # Tokenize, compute document frequencies, and pre-compute term freqs
         for doc in documents:
             tokens = self._tokenize(doc)
             self._documents.append(tokens)
             self._doc_lengths.append(len(tokens))
 
-            # Count unique terms in this document
-            unique_terms = set(tokens)
-            for term in unique_terms:
+            # Build per-document term frequency map
+            tf: dict[str, int] = {}
+            for token in tokens:
+                tf[token] = tf.get(token, 0) + 1
+            self._term_freqs.append(tf)
+
+            # Count unique terms in this document (for IDF)
+            for term in tf:
                 self._doc_freqs[term] = self._doc_freqs.get(term, 0) + 1
 
         # Compute average document length
@@ -333,12 +343,16 @@ class BM25Index:
         self._initialized = True
         logger.debug(f"Built BM25 index with {len(documents)} documents, {len(self._doc_freqs)} unique terms")
 
-    def score(self, query: str, doc_idx: int) -> float:
+    def score(self, query: str, doc_idx: int, *, _query_tokens: list[str] | None = None) -> float:
         """Compute BM25 score for a query against a document.
+
+        Uses precomputed per-document term frequency maps for O(1) lookups.
 
         Args:
             query: Search query
             doc_idx: Index of document to score
+            _query_tokens: Pre-tokenized query tokens (avoids re-tokenizing
+                per document when called from search()).
 
         Returns:
             BM25 score (higher is more relevant)
@@ -346,14 +360,9 @@ class BM25Index:
         if not self._initialized or doc_idx >= len(self._documents):
             return 0.0
 
-        query_tokens = self._tokenize(query)
-        doc_tokens = self._documents[doc_idx]
+        query_tokens = _query_tokens if _query_tokens is not None else self._tokenize(query)
         doc_len = self._doc_lengths[doc_idx]
-
-        # Count term frequencies in document
-        term_freqs: dict[str, int] = {}
-        for token in doc_tokens:
-            term_freqs[token] = term_freqs.get(token, 0) + 1
+        term_freqs = self._term_freqs[doc_idx]
 
         score = 0.0
         for term in query_tokens:
@@ -373,6 +382,9 @@ class BM25Index:
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
         """Search for documents matching query.
 
+        Tokenizes the query once and reuses the tokens for all document scores,
+        avoiding O(n) redundant tokenization.
+
         Args:
             query: Search query
             top_k: Number of results to return
@@ -383,9 +395,10 @@ class BM25Index:
         if not self._initialized:
             return []
 
+        query_tokens = self._tokenize(query)
         scores = []
         for idx in range(len(self._documents)):
-            score = self.score(query, idx)
+            score = self.score(query, idx, _query_tokens=query_tokens)
             if score > 0:
                 scores.append((idx, score))
 
@@ -393,17 +406,18 @@ class BM25Index:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
 
-    def get_normalized_score(self, query: str, doc_idx: int) -> float:
+    def get_normalized_score(self, query: str, doc_idx: int, *, _query_tokens: list[str] | None = None) -> float:
         """Get a normalized BM25 score between 0 and 1.
 
         Args:
             query: Search query
             doc_idx: Document index
+            _query_tokens: Pre-tokenized query tokens to avoid redundant tokenization.
 
         Returns:
             Normalized score between 0 and 1
         """
-        raw_score = self.score(query, doc_idx)
+        raw_score = self.score(query, doc_idx, _query_tokens=_query_tokens)
         # Normalize using sigmoid-like function
         # Score of ~10 maps to ~0.9
         return raw_score / (raw_score + 10.0) if raw_score > 0 else 0.0
@@ -467,6 +481,14 @@ class MemoryVectorStore:
         self._dedup_stats = {"removed_by_hash": 0, "removed_by_similarity": 0}
         self._bm25_index: BM25Index | None = None
 
+    def mark_dirty(self) -> None:
+        """Mark the index as stale so it will be rebuilt on next search.
+
+        Unlike destroying the singleton, this keeps the existing index
+        usable for searches until the rebuild completes lazily.
+        """
+        self._files_hash = None
+
     @property
     def index_type(self) -> IndexType:
         """Get the current index type."""
@@ -480,14 +502,24 @@ class MemoryVectorStore:
     def _ensure_initialized(self) -> bool:
         """Ensure the index is initialized, rebuilding if needed.
 
+        When the index has been marked dirty (``_files_hash is None``),
+        re-checks the files and rebuilds if content has changed, while
+        keeping the stale index usable until the new one is ready.
+
         Returns:
             True if vector search is available, False if falling back to keyword
         """
-        if self._initialized:
+        # Fast path: already initialized and not marked dirty
+        if self._initialized and self._files_hash is not None:
             return self._index is not None
 
-        self._initialized = True
-        self._embeddings = _get_embeddings()
+        if not self._initialized:
+            self._initialized = True
+            try:
+                self._embeddings = _get_embeddings()
+            except Exception as e:
+                logger.warning("Embeddings initialization failed (network?): %s", e)
+                self._embeddings = None
 
         if self._embeddings is None:
             return False
@@ -496,8 +528,8 @@ class MemoryVectorStore:
         memory_files = _get_memory_files()
         current_hash = _compute_files_hash(memory_files)
 
-        # Try to load existing index
-        if INDEX_FILE.exists() and METADATA_FILE.exists():
+        # Try to load existing index (only on first init, not on dirty refresh)
+        if self._index is None and INDEX_FILE.exists() and METADATA_FILE.exists():
             try:
                 self._load_index()
                 if self._files_hash == current_hash:
@@ -506,11 +538,15 @@ class MemoryVectorStore:
             except Exception as e:
                 logger.warning(f"Failed to load existing index: {e}")
 
+        # Skip rebuild if hash matches (no actual change since mark_dirty)
+        if self._files_hash == current_hash:
+            return self._index is not None
+
         # Rebuild index
         try:
             self._rebuild_index(memory_files, current_hash)
-        except ImportError as e:
-            logger.warning("Memory indexing unavailable (missing dependency): %s", e)
+        except (ImportError, Exception) as e:
+            logger.warning("Memory indexing failed: %s", e)
             return False
         return self._index is not None
 
@@ -534,7 +570,7 @@ class MemoryVectorStore:
         if not self._metadata:
             return
 
-        texts = [chunk["text"] for chunk in self._metadata]
+        texts = [chunk.get("contextualized_text", chunk["text"]) for chunk in self._metadata]
         self._bm25_index = BM25Index(
             k1=self._search_config.bm25_k1,
             b=self._search_config.bm25_b,
@@ -666,6 +702,7 @@ class MemoryVectorStore:
 
         # Collect all chunks with modification time
         all_chunks: list[dict] = []
+        source_documents: dict[str, str] = {}
         for file_path in memory_files:
             try:
                 content = file_path.read_text(encoding="utf-8")
@@ -673,6 +710,7 @@ class MemoryVectorStore:
                 mtime = file_path.stat().st_mtime
                 chunks = _chunk_text(content, source, mtime)
                 all_chunks.extend(chunks)
+                source_documents[source] = content
             except Exception as e:
                 logger.warning(f"Failed to read {file_path}: {e}")
 
@@ -680,8 +718,30 @@ class MemoryVectorStore:
             logger.warning("No memory content to index")
             return
 
-        # Get embeddings for all chunks (with caching)
-        texts = [c["text"] for c in all_chunks]
+        # Contextual enrichment: add LLM-generated context to each chunk
+        try:
+            from ag3nt_agent.context_enrichment import ContextEnricher
+
+            enricher = ContextEnricher()
+            all_chunks = enricher.enrich_chunks(all_chunks, source_documents)
+            enriched_count = sum(
+                1 for c in all_chunks
+                if c.get("contextualized_text", c["text"]) != c["text"]
+            )
+            logger.info(
+                f"Contextual enrichment: {enriched_count}/{len(all_chunks)} chunks enriched"
+            )
+        except ImportError:
+            logger.debug("context_enrichment module not available, skipping enrichment")
+            for chunk in all_chunks:
+                chunk.setdefault("contextualized_text", chunk["text"])
+        except Exception as e:
+            logger.warning(f"Contextual enrichment failed: {e}, using raw chunks")
+            for chunk in all_chunks:
+                chunk.setdefault("contextualized_text", chunk["text"])
+
+        # Get embeddings using contextualized text (better semantic capture)
+        texts = [c.get("contextualized_text", c["text"]) for c in all_chunks]
         try:
             from ag3nt_agent.embedding_cache import get_embedding_cache
 
@@ -914,14 +974,15 @@ def _get_memory_store() -> MemoryVectorStore:
 
 
 def reset_memory_store() -> None:
-    """Reset the singleton memory store.
+    """Invalidate the memory store index so it rebuilds on next search.
 
-    Forces reindexing on next search. Useful for testing or after
-    significant memory file changes.
+    Instead of destroying the singleton (which forces a full re-embed),
+    this marks the index as dirty. The existing stale index remains
+    usable for searches until the lazy rebuild completes.
     """
-    global _memory_store
     with _memory_store_lock:
-        _memory_store = None
+        if _memory_store is not None:
+            _memory_store.mark_dirty()
 
 
 def get_memory_store_info() -> dict:
@@ -1014,3 +1075,58 @@ def get_memory_search_tool():
         return search_memory(query, top_k)
 
     return memory_search
+
+
+def get_memory_store_tool():
+    """Get the memory store tool for the agent.
+
+    Returns:
+        LangChain tool for storing notes to memory
+    """
+    from langchain_core.tools import tool as lc_tool
+
+    @lc_tool
+    def memory_store(
+        content: str,
+        category: str = "General",
+    ) -> str:
+        """Store a note or piece of information to long-term memory.
+
+        Use this to persist user preferences, project decisions, important facts,
+        or any information that should be recalled in future sessions. Notes are
+        appended to the daily memory log at ~/.ag3nt/memory/.
+
+        Args:
+            content: The information to store (e.g., "User prefers conventional commits")
+            category: Optional category label (e.g., "User Preferences", "Project Decisions")
+
+        Returns:
+            Confirmation message with the file path where the note was saved
+        """
+        import datetime
+
+        today = datetime.date.today().isoformat()
+        memory_dir = Path.home() / ".ag3nt" / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        daily_file = memory_dir / f"{today}.md"
+
+        # Build entry
+        timestamp = datetime.datetime.now().strftime("%H:%M")
+        entry = f"\n## {category} ({timestamp})\n- {content}\n"
+
+        # Append to daily log (create with header if new)
+        if not daily_file.exists():
+            daily_file.write_text(
+                f"# Memory Notes - {today}\n{entry}",
+                encoding="utf-8",
+            )
+        else:
+            with open(daily_file, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+        # Invalidate the vector index so the new note is found on next search
+        reset_memory_store()
+
+        return f"Stored to {daily_file}: [{category}] {content}"
+
+    return memory_store
