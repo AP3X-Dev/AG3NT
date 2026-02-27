@@ -720,9 +720,9 @@ class MemoryVectorStore:
 
         # Contextual enrichment: add LLM-generated context to each chunk
         try:
-            from ag3nt_agent.context_enrichment import ContextEnricher
+            from ag3nt_agent.context_enrichment import get_context_enricher
 
-            enricher = ContextEnricher()
+            enricher = get_context_enricher()
             all_chunks = enricher.enrich_chunks(all_chunks, source_documents)
             enriched_count = sum(
                 1 for c in all_chunks
