@@ -18,7 +18,6 @@ Usage:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import sqlite3
@@ -311,6 +310,10 @@ class ContextEnricher:
         """
         content_hash = chunk.get("content_hash", "")
         original_text = chunk["text"]
+
+        # Skip cache for chunks without a content hash
+        if not content_hash:
+            return original_text
 
         # Check cache first
         cached_prefix = self._cache.get(content_hash)
