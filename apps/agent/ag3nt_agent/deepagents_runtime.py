@@ -1487,12 +1487,18 @@ def _build_agent() -> CompiledStateGraph:
     # Get interrupt_on configuration for risky tools
     interrupt_on = _get_interrupt_on_config()
 
-    # Use MemorySaver for checkpoints (supports both sync and async)
-    # Note: SqliteSaver doesn't support async methods, and AsyncSqliteSaver
-    # requires async context management which is complex for our use case.
-    # MemorySaver works reliably for both sync and async agent execution.
-    checkpointer = MemorySaver()
-    logger.info("Using MemorySaver checkpointer")
+    # Persistent checkpoints via SqliteSaver (survives daemon restarts).
+    # Falls back to MemorySaver if langgraph-checkpoint-sqlite is not installed.
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
+        db_path = _get_user_data_path() / "checkpoints.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpointer = SqliteSaver.from_conn_string(str(db_path))
+        logger.info("Using SqliteSaver checkpointer at %s", db_path)
+    except (ImportError, Exception) as exc:
+        checkpointer = MemorySaver()
+        logger.info("Using MemorySaver checkpointer (SqliteSaver unavailable: %s)", exc)
 
     # Create shell middleware for command execution
     # Uses ~/.ag3nt/workspace/ as the working directory
