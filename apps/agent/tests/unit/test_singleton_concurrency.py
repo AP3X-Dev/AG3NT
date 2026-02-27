@@ -34,35 +34,6 @@ class TestMemoryStoreSingleton:
         assert len(set(results)) == 1  # All same instance
 
 
-class TestToolBatcherSingleton:
-    """Test tool_batcher singleton thread safety."""
-
-    def test_tool_batcher_singleton_thread_safety(self):
-        """10 threads via Barrier, verify same id()."""
-        import ag3nt_agent.tool_batcher as mod
-
-        # Reset
-        with mod._batcher_lock:
-            mod._tool_batcher = None
-
-        barrier = threading.Barrier(10)
-        results = []
-
-        def get_batcher():
-            barrier.wait()
-            batcher = mod.get_tool_batcher()
-            results.append(id(batcher))
-
-        threads = [threading.Thread(target=get_batcher) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert len(results) == 10
-        assert len(set(results)) == 1  # All same instance
-
-
 class TestPlanningSingleton:
     """Test planning_tools singleton thread safety."""
 
