@@ -75,11 +75,11 @@ class IdentityLoader:
 
         # User context section
         if "user_context" in data:
-            parts.append(f"## User Context\n{data['user_context']}")
+            parts.append(f"## User Context\n{self._strip_header(data['user_context'])}")
 
         # Behavior guidelines section
         if "agents" in data:
-            parts.append(f"## Behavior Guidelines\n{data['agents']}")
+            parts.append(f"## Behavior Guidelines\n{self._strip_header(data['agents'])}")
 
         return "\n\n".join(parts)
 

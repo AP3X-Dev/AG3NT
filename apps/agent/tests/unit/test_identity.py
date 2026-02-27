@@ -102,3 +102,21 @@ class TestIdentityLoaderBuildPrompt:
         loader = IdentityLoader(base_dir=identity_dir)
         result = loader.build_system_prompt()
         assert "Soul content." in result
+
+    def test_strips_user_context_header(self, identity_dir):
+        (identity_dir / "IDENTITY.md").write_text("Identity.", encoding="utf-8")
+        content = "# USER.md — Personal\n\nMy preferences."
+        (identity_dir / "USER.md").write_text(content, encoding="utf-8")
+        loader = IdentityLoader(base_dir=identity_dir)
+        result = loader.build_system_prompt()
+        assert "# USER.md" not in result
+        assert "My preferences." in result
+
+    def test_strips_agents_header(self, identity_dir):
+        (identity_dir / "IDENTITY.md").write_text("Identity.", encoding="utf-8")
+        content = "# AGENTS.md — Rules\n\nBehavior rules."
+        (identity_dir / "AGENTS.md").write_text(content, encoding="utf-8")
+        loader = IdentityLoader(base_dir=identity_dir)
+        result = loader.build_system_prompt()
+        assert "# AGENTS.md" not in result
+        assert "Behavior rules." in result
