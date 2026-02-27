@@ -17,6 +17,7 @@ import threading
 
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, ModelResponse
 from deepagents.middleware._utils import append_to_system_message
+from ag3nt_agent.plan_mode_guard import PlanModeGuard
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,10 @@ class PlanningState:
     context_package: str = ""  # Serialized context for prompt injection
     active_blueprint_id: str | None = None  # Active blueprint ID
     validation_gates_enabled: bool = False  # Run validation between tasks
+
+    # Plan execution tracking (set on confirm, None when not available)
+    plan_executor: Any = None  # PlanExecutor instance
+    plan_recorder: Any = None  # PlanLearningRecorder instance
 
 
 class PlanningMiddleware(AgentMiddleware[AgentState, Any]):
@@ -117,65 +122,28 @@ You are in planning mode. Before executing any actions, you MUST create a detail
 
 ## Planning Process
 
-1. **Analyze the Request**
-   - Break down what the user is asking for
-   - Identify all files that need to be read or modified
-   - Note any ambiguities or questions
+1. **Enter Planning**
+   Call `plan_enter(title="...", mode="feature")` to create a plan file.
+   - Use mode="feature" for focused tasks
+   - Use mode="project" for complex multi-component work
 
-2. **Create a Detailed Plan**
-   Use `write_todos` to create tasks:
-   - Clear, actionable descriptions
-   - Logical order (dependencies first)
-   - Estimated complexity for each task
-   - Files involved in each task
+2. **Analyze & Plan**
+   - Read files, search the codebase, explore
+   - Edit the plan file with your findings and steps
+   - Structure steps as: `- [ ] Step N: Description [CHECKPOINT]`
+   - Add [CHECKPOINT] to steps that need validation
 
-3. **Present for Approval**
-   - Summarize the plan in your response
-   - List all tasks clearly
-   - Note any assumptions or risks
-   - Ask user to confirm before proceeding
+3. **Submit for Approval**
+   Call `plan_exit(summary="...")` when your plan is ready.
+   The user will review and accept or reject.
 
 ## During Planning Phase
 
-✅ **You CAN:**
-- Read files to understand context
-- Search for information
-- Use memory_search
-- Create todos with write_todos
-
-❌ **You CANNOT:**
-- Write, edit, or delete files
-- Execute shell commands
-- Make any changes to code
-
-## Plan Format
-
-Structure your response like this:
-
-### Implementation Plan
-
-**Summary:** [1-2 sentence overview of what will be done]
-
-**Files to be modified:**
-- `/workspace/file1.py` - Description of changes
-- `/workspace/file2.js` - Description of changes
-
-**Tasks:**
-1. [Task description] - Complexity: [Low/Med/High] - Files: [...]
-2. [Task description] - Complexity: [Low/Med/High] - Files: [...]
-...
-
-**Assumptions:**
-- [List any assumptions you're making]
-
-**Risks/Concerns:**
-- [Note potential issues or edge cases]
-
-**Ready to proceed?** (Wait for user confirmation)
+✅ **You CAN:** Read files, search, explore, edit the plan file
+❌ **You CANNOT:** Write/edit other files, run shell commands, make code changes
 
 ---
-
-**Remember:** Do NOT execute any changes yet. Only create the plan.
+**Remember:** Call `plan_enter` first, explore, then `plan_exit` when ready.
 """
 
     def _get_execution_prompt(self, plan_state: PlanningState) -> str:
@@ -183,6 +151,13 @@ Structure your response like this:
         total_tasks = len(plan_state.plan_tasks)
         current = plan_state.current_task_index + 1
 
+        # Use PlanExecutor's step note if available
+        executor = plan_state.plan_executor
+        if executor and plan_state.current_task_index < len(executor.steps):
+            step = executor.steps[plan_state.current_task_index]
+            return executor.get_step_system_note(step)
+
+        # Fallback to generic execution prompt
         return f"""
 
 ✅ **PLAN APPROVED - EXECUTION MODE**
@@ -344,21 +319,184 @@ If a validation gate fails, fix the issues before moving to the next task.
     def confirm_plan(self, thread_id: str, tasks: list[str]):
         """User confirmed the plan - switch to execution mode."""
         with self._lock:
-            if thread_id in self.sessions:
-                plan_state = self.sessions[thread_id]
-                plan_state.plan_confirmed = True
-                plan_state.planning_phase = False
-                plan_state.plan_tasks = tasks
-                logger.info(f"Plan confirmed for session {thread_id}: {len(tasks)} tasks")
+            if thread_id not in self.sessions:
+                return
+            plan_state = self.sessions[thread_id]
+            plan_state.plan_confirmed = True
+            plan_state.planning_phase = False
+            plan_state.plan_tasks = tasks
+
+        # Create PlanExecutor and PlanLearningRecorder outside the lock
+        # to avoid holding the lock during I/O (file reads, imports).
+
+        # Create PlanExecutor if plan file exists
+        try:
+            from ag3nt_agent.plan_tools import PlanState as ToolPlanState
+            tool_state = ToolPlanState.get(thread_id)
+            plan_path = tool_state.active_plan
+            if plan_path and plan_path.exists():
+                from ag3nt_agent.plan_executor import PlanExecutor
+                plan_content = plan_path.read_text(encoding="utf-8")
+                plan_state.plan_executor = PlanExecutor(
+                    plan_path=str(plan_path),
+                    plan_content=plan_content,
+                )
+                logger.info(
+                    "PlanExecutor created for session %s (%d steps)",
+                    thread_id, len(plan_state.plan_executor.steps),
+                )
+        except Exception as exc:
+            logger.debug("PlanExecutor not available: %s", exc)
+
+        # Create PlanLearningRecorder
+        try:
+            from ag3nt_agent.plan_learning import PlanLearningRecorder
+            plan_state.plan_recorder = PlanLearningRecorder()
+        except Exception as exc:
+            logger.debug("PlanLearningRecorder not available: %s", exc)
+
+        logger.info(f"Plan confirmed for session {thread_id}: {len(tasks)} tasks")
 
     def advance_task(self, thread_id: str):
-        """Move to next task in plan."""
+        """Move to next task in plan, with optional executor tracking."""
         with self._lock:
-            if thread_id in self.sessions:
-                self.sessions[thread_id].current_task_index += 1
-                logger.info(
-                    f"Advanced to task {self.sessions[thread_id].current_task_index + 1}"
+            if thread_id not in self.sessions:
+                return
+            plan_state = self.sessions[thread_id]
+
+            # Use PlanExecutor to mark step complete and emit events
+            executor = plan_state.plan_executor
+            if executor and plan_state.current_task_index < len(executor.steps):
+                step = executor.steps[plan_state.current_task_index]
+                try:
+                    executor.mark_step_complete(step)
+                    executor.emit_step_completed(step, success=True)
+
+                    # Create git checkpoint if step has [CHECKPOINT]
+                    if step.is_checkpoint:
+                        executor.create_git_checkpoint(step.number)
+                except Exception as exc:
+                    logger.debug("PlanExecutor step completion error: %s", exc)
+
+            plan_state.current_task_index += 1
+
+            # Check if all tasks done
+            if plan_state.current_task_index >= len(plan_state.plan_tasks):
+                # Emit execution completed
+                if executor:
+                    try:
+                        executor.emit_execution_completed(success=True)
+                    except Exception as exc:
+                        logger.debug("PlanExecutor completion emit error: %s", exc)
+
+                # Record learning outcome (fire-and-forget)
+                self._record_learning_outcome(plan_state, thread_id, success=True)
+                return
+
+            # Emit next step started
+            if executor and plan_state.current_task_index < len(executor.steps):
+                try:
+                    next_step = executor.steps[plan_state.current_task_index]
+                    executor.emit_step_started(next_step)
+                    executor.create_git_checkpoint(next_step.number)
+                except Exception as exc:
+                    logger.debug("PlanExecutor next step emit error: %s", exc)
+
+            logger.info(f"Advanced to task {plan_state.current_task_index + 1}")
+
+    def run_validation_gate(
+        self, thread_id: str, files_modified: list[str] | None = None,
+    ) -> dict | None:
+        """Run validation gate for current task if enabled.
+
+        Returns validation result dict or None if gates not enabled.
+        """
+        with self._lock:
+            plan_state = self.sessions.get(thread_id)
+
+        if not plan_state or not plan_state.validation_gates_enabled:
+            return None
+
+        try:
+            import asyncio
+            from ag3nt_agent.validation_gates import ValidationGateRunner, ValidationLevel
+
+            runner = ValidationGateRunner()
+
+            # Run syntax check on modified files
+            async def _run():
+                result = await runner.run_gate(
+                    ValidationLevel.SYNTAX, files_modified=files_modified,
                 )
+                return {
+                    "passed": result.passed,
+                    "details": result.details,
+                    "level": "SYNTAX",
+                }
+
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, _run())
+                    return future.result(timeout=30)
+            except RuntimeError:
+                return asyncio.run(_run())
+
+        except Exception as exc:
+            logger.debug("Validation gate failed: %s", exc)
+            return None
+
+    def _record_learning_outcome(
+        self, plan_state: PlanningState, thread_id: str, success: bool,
+    ):
+        """Record blueprint outcome for future learning (fire-and-forget)."""
+        recorder = plan_state.plan_recorder
+        if not recorder:
+            return
+
+        try:
+            import asyncio
+
+            # Create a minimal blueprint-like object for the recorder
+            class _MiniBP:
+                def __init__(self, tasks, goal):
+                    self.id = thread_id
+                    self.session_id = thread_id
+                    self.goal = goal
+                    self.why = ""
+                    self.status = "completed" if success else "failed"
+                    self.learnings = []
+                    self.tasks = tasks
+
+            class _MiniTask:
+                def __init__(self, title, completed):
+                    self.title = title
+                    self.status = "completed" if completed else "pending"
+                    self.complexity = "medium"
+                    self.files_involved = []
+                    self.validation_result = None
+                    self.notes = ""
+
+            mini_tasks = [
+                _MiniTask(t, i < plan_state.current_task_index)
+                for i, t in enumerate(plan_state.plan_tasks)
+            ]
+            bp = _MiniBP(
+                mini_tasks,
+                plan_state.plan_tasks[0] if plan_state.plan_tasks else "plan",
+            )
+
+            async def _record():
+                await recorder.record_blueprint_outcome(bp, success=success)
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_record())
+            except RuntimeError:
+                asyncio.run(_record())
+        except Exception as exc:
+            logger.debug("Learning recording failed: %s", exc)
 
     def disable_plan_mode(self, thread_id: str):
         """Disable planning mode for a session."""
@@ -542,15 +680,29 @@ If a validation gate fails, fix the issues before moving to the next task.
                     f"Blueprint created for session {thread_id}: {len(task_descriptions)} tasks, awaiting confirmation"
                 )
 
-        # Block write tools
+        # Use PlanModeGuard for smart path-aware blocking when plan_enter
+        # has been called.  Fall back to the simpler BLOCKED_TOOLS set when
+        # plan mode was toggled via the UI but plan_enter hasn't run yet.
         blocked = []
         allowed = []
+        guard_active = PlanModeGuard.is_active()
         for tc in response.tool_calls:
             tool_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-            if tool_name in self.BLOCKED_TOOLS:
-                blocked.append(tool_name)
+            tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+
+            if guard_active:
+                # PlanModeGuard handles path-aware blocking
+                is_ok, reason = PlanModeGuard.is_tool_allowed(tool_name, tc_args)
             else:
+                # Fallback: simple BLOCKED_TOOLS check (UI toggled plan mode
+                # but plan_enter hasn't run yet)
+                is_ok = tool_name not in self.BLOCKED_TOOLS
+                reason = f"Tool '{tool_name}' blocked during planning phase" if not is_ok else ""
+
+            if is_ok:
                 allowed.append(tc)
+            else:
+                blocked.append(f"{tool_name}: {reason}")
 
         if not blocked:
             return response
