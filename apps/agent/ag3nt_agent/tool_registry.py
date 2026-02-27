@@ -20,6 +20,7 @@ logger = logging.getLogger("ag3nt.tools")
 # Each entry: (friendly_name, module_path, callable_name)
 TOOL_REGISTRY: list[tuple[str, str, str]] = [
     ("memory_search", "ag3nt_agent.memory_search", "get_memory_search_tool"),
+    ("memory_store", "ag3nt_agent.memory_search", "get_memory_store_tool"),
     ("memory_summarizer", "ag3nt_agent.memory_summarizer", "get_summarize_memory_tool"),
     ("node_action", "ag3nt_agent.node_action_tool", "get_node_action_tool"),
     ("skill_executor", "ag3nt_agent.skill_executor", "run_skill"),
@@ -28,12 +29,14 @@ TOOL_REGISTRY: list[tuple[str, str, str]] = [
     ("glob", "ag3nt_agent.glob_tool", "get_glob_tool"),
     ("grep", "ag3nt_agent.grep_tool", "get_grep_tool"),
     ("notebook", "ag3nt_agent.notebook_tool", "get_notebook_tool"),
+    ("pdf", "ag3nt_agent.pdf_tool", "get_pdf_tool"),
     ("codebase_search", "ag3nt_agent.codebase_search", "get_codebase_search_tool"),
     ("exec_command", "ag3nt_agent.exec_tool", "get_exec_tool"),
     ("process", "ag3nt_agent.process_tool", "get_process_tool"),
     ("apply_patch", "ag3nt_agent.apply_patch_tool", "get_apply_patch_tool"),
     ("git", "ag3nt_agent.git_tool", "get_git_tools"),
     ("planning", "ag3nt_agent.planning_tools", "get_planning_tools"),
+    ("plan_lifecycle", "ag3nt_agent.plan_tools", "get_plan_tools"),
     ("context_blueprint", "ag3nt_agent.context_blueprint", "get_blueprint_tools"),
     ("sessions", "ag3nt_agent.session_tools", "get_session_tools"),
     ("lsp", "ag3nt_agent.lsp.tool", "get_lsp_tool"),
@@ -41,7 +44,17 @@ TOOL_REGISTRY: list[tuple[str, str, str]] = [
     ("multi_edit", "ag3nt_agent.multi_edit_tool", "get_multi_edit_tool"),
     ("batch", "ag3nt_agent.batch_tool", "get_batch_tool"),
     ("external_path", "ag3nt_agent.external_path_tool", "get_external_access_tools"),
+    ("session_search", "ag3nt_agent.session_search_tool", "get_session_search_tool"),
+    ("image_tools", "ag3nt_agent.generate_image_tool", "get_image_tools"),
 ]
+
+
+def _is_allowed(tool_policy: Any, name: str) -> bool:
+    """Check if a tool is allowed by the policy (safe helper)."""
+    try:
+        return tool_policy.is_allowed(name)
+    except AttributeError:
+        return True  # policy has no is_allowed — allow anyway
 
 
 def load_tools(
@@ -60,33 +73,60 @@ def load_tools(
     Returns:
         Flat list of loaded tool objects.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     if registry is None:
         registry = TOOL_REGISTRY
 
-    tools: list = []
-    for name, module_path, func_name in registry:
-        # Skip tools denied by policy before importing
-        if tool_policy is not None:
-            try:
-                if not tool_policy.is_allowed(name):
-                    logger.debug("Tool '%s' denied by policy, skipping import", name)
-                    continue
-            except AttributeError:
-                pass  # policy has no is_allowed — load anyway
+    # Filter by policy first
+    allowed = [
+        (name, mod_path, func_name)
+        for name, mod_path, func_name in registry
+        if tool_policy is None or _is_allowed(tool_policy, name)
+    ]
+    if tool_policy is not None:
+        denied = set(name for name, _, _ in registry) - set(name for name, _, _ in allowed)
+        for name in denied:
+            logger.debug("Tool '%s' denied by policy, skipping import", name)
 
+    def _load_one(entry: tuple[str, str, str]) -> tuple[str, Any]:
+        name, module_path, func_name = entry
         try:
             mod = importlib.import_module(module_path)
             getter = getattr(mod, func_name)
             result = getter() if callable(getter) and not hasattr(getter, "name") else getter
+            return name, result
+        except ImportError as exc:
+            logger.warning("%s tool not available: %s", name, exc)
+            return name, None
+        except Exception as exc:
+            logger.warning("%s tool failed to load: %s", name, exc)
+            return name, None
+
+    tools: list = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = pool.map(_load_one, allowed)
+        for name, result in results:
+            if result is None:
+                continue
             if isinstance(result, list):
                 tools.extend(result)
                 logger.info("%s tools loaded (%d tool(s))", name, len(result))
             else:
                 tools.append(result)
                 logger.info("%s tool loaded", name)
-        except ImportError as exc:
-            logger.warning("%s tool not available: %s", name, exc)
-        except Exception as exc:
-            logger.warning("%s tool failed to load: %s", name, exc)
+
+    # Wrap tools with event emission if autonomous system is running
+    try:
+        from ag3nt_agent.deepagents_runtime import _autonomous_runtime
+        runtime = _autonomous_runtime
+        if runtime is not None and runtime.is_running:
+            from ag3nt_agent.bus.tool_wrapper import wrap_tools_with_events
+            bus = runtime.event_bus
+            if bus is not None:
+                tools = wrap_tools_with_events(tools, bus)
+                logger.info("Tools wrapped with event emission (%d tools)", len(tools))
+    except Exception as exc:
+        logger.debug("Event wrapping skipped: %s", exc)
 
     return tools
