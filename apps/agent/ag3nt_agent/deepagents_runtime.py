@@ -179,8 +179,7 @@ def _emit_turn_completed(*, session_id: str, char_count: int) -> None:
     Non-blocking, fire-and-forget. Failures are logged and swallowed.
     """
     try:
-        import asyncio
-        from ag3nt_agent.autonomous.event_bus import EventBus, Event, EventPriority
+        from ag3nt_agent.autonomous.event_bus import get_event_bus, Event, EventPriority
 
         event = Event(
             event_type="turn.completed",
@@ -188,15 +187,8 @@ def _emit_turn_completed(*, session_id: str, char_count: int) -> None:
             payload={"session_id": session_id, "char_count": char_count},
             priority=EventPriority.LOW,
         )
-        bus = EventBus()
-
-        # Publish async event from sync context
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(bus.publish(event))
-        except RuntimeError:
-            # No running loop — create one for the publish
-            asyncio.run(bus.publish(event))
+        bus = get_event_bus()
+        bus.emit_sync(event)
     except Exception:
         logger.debug("Failed to emit turn.completed event", exc_info=True)
 
