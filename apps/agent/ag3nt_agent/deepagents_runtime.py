@@ -84,6 +84,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -161,6 +162,7 @@ _agent: CompiledStateGraph | None = None
 
 # Stores interrupt IDs per session for multi-interrupt resume
 _pending_interrupt_ids: dict[str, list[str]] = {}
+_pending_interrupt_ids_lock = threading.Lock()
 
 # Agent pool for pre-warmed instances (optional feature)
 _use_agent_pool: bool = os.environ.get("AG3NT_USE_AGENT_POOL", "false").lower() == "true"
@@ -507,6 +509,27 @@ def _load_mcp_tools() -> list:
 # Import the enhanced web search function from web_search module
 from ag3nt_agent.web_search import internet_search as _internet_search_impl
 
+# ── Shared HTTP session for connection pooling (fetch_url, etc.) ──
+_http_session: "requests.Session | None" = None
+_http_session_lock = threading.Lock()
+
+
+def _get_http_session():
+    """Return a shared requests.Session with connection pooling.
+
+    Uses double-checked locking for thread safety with minimal overhead.
+    """
+    global _http_session
+    if _http_session is None:
+        with _http_session_lock:
+            if _http_session is None:
+                import requests as _req
+                _http_session = _req.Session()
+                _http_session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (compatible; AG3NT/1.0; +https://github.com/ag3nt)"
+                })
+    return _http_session
+
 
 @tool
 def internet_search(
@@ -554,16 +577,10 @@ def fetch_url(
         - content_length: Length of the markdown content
     """
     try:
-        import requests
         from markdownify import markdownify
 
-        response = requests.get(
-            url,
-            timeout=timeout,
-            headers={
-                "User-Agent": "Mozilla/5.0 (compatible; AG3NT/1.0; +https://github.com/ag3nt)"
-            },
-        )
+        session = _get_http_session()
+        response = session.get(url, timeout=timeout)
         response.raise_for_status()
 
         # Convert HTML content to markdown
@@ -585,7 +602,7 @@ def fetch_url(
     except ImportError as e:
         return {
             "error": f"Missing dependency: {e}",
-            "suggestion": "Install with: pip install requests markdownify",
+            "suggestion": "Install with: pip install markdownify",
         }
     except (OSError, RuntimeError, ValueError) as e:
         return {
@@ -763,8 +780,9 @@ def _create_subagents() -> list[dict]:
 
     # Try to load additional tools that may be available
     try:
-        from ag3nt_agent.memory_search import get_memory_search_tool
+        from ag3nt_agent.memory_search import get_memory_search_tool, get_memory_store_tool
         tool_map["memory_search"] = get_memory_search_tool()
+        tool_map["memory_store"] = get_memory_store_tool()
     except ImportError:
         pass
 
@@ -905,141 +923,13 @@ def _build_backend(repo_root: Path):
     )
 
 
-def _build_agent() -> CompiledStateGraph:
-    """Build and return the DeepAgents agent graph.
+def _get_system_prompt() -> str:
+    """Return the AG3NT system prompt.
 
-    Returns:
-        Configured DeepAgents graph
-
-    Raises:
-        ValueError: If required API keys are missing for the selected provider
+    Extracted to a standalone function so it can be shared between
+    _build_agent() and the UI agent factory.
     """
-    from deepagents import create_deep_agent
-    from langgraph.checkpoint.memory import MemorySaver
-
-    model = _create_model()
-
-    # Get repo root for skill discovery and file operations
-    repo_root = _get_repo_root()
-
-    # Discover available skill sources
-    skill_sources = _get_skill_sources(repo_root)
-
-    # Create backend with multi-root support (skills + user data)
-    backend = _build_backend(repo_root)
-
-    # Get memory sources (AGENTS.md, MEMORY.md)
-    memory_sources = _get_memory_sources()
-
-    # Create sub-agents (Researcher, Coder)
-    subagents = _create_subagents()
-
-    # Get interrupt_on configuration for risky tools
-    interrupt_on = _get_interrupt_on_config()
-
-    # Use MemorySaver for checkpoints (supports both sync and async)
-    # Note: SqliteSaver doesn't support async methods, and AsyncSqliteSaver
-    # requires async context management which is complex for our use case.
-    # MemorySaver works reliably for both sync and async agent execution.
-    checkpointer = MemorySaver()
-    logger.info("Using MemorySaver checkpointer")
-
-    # Create shell middleware for command execution
-    # Uses ~/.ag3nt/workspace/ as the working directory
-    workspace_path = _get_user_data_path() / "workspace"
-    workspace_path.mkdir(exist_ok=True)
-    shell_middleware = ShellMiddleware(
-        workspace_root=str(workspace_path),
-        timeout=60.0,  # 60 second timeout
-        max_output_bytes=100_000,  # 100KB output limit
-    )
-
-    # Start file watcher for external change detection
-    try:
-        from ag3nt_agent.file_watcher import FileWatcher
-        from ag3nt_agent.file_tracker import FileTracker
-        from ag3nt_agent.agent_config import FILE_WATCHER_DEBOUNCE
-
-        def _on_file_change(file_path: str, event_type: str) -> None:
-            """Invalidate FileTracker entries when files change externally."""
-            try:
-                tracker = FileTracker.get_instance()
-                tracker.invalidate_all_sessions(file_path)
-            except Exception:
-                logger.debug("Failed to invalidate file tracker for %s", file_path)
-
-        watcher = FileWatcher.get_instance()
-        watcher.start(str(workspace_path), debounce_seconds=FILE_WATCHER_DEBOUNCE)
-        watcher.on_change(_on_file_change)
-        logger.info("File watcher started for workspace")
-    except ImportError:
-        logger.debug("watchdog not installed — file watcher disabled")
-
-    # Initialize path protection for external directory access control
-    path_protection_middleware = None
-    try:
-        from ag3nt_agent.tool_policy import PathProtection, PathProtectionMiddleware
-        path_protection = PathProtection.get_instance(str(workspace_path))
-        path_protection_middleware = PathProtectionMiddleware(path_protection)
-        logger.info("Path protection initialized for workspace")
-    except ImportError:
-        pass
-
-    # Initialize LSP manager for post-edit diagnostics and code navigation
-    try:
-        from ag3nt_agent.lsp.manager import LspManager
-        LspManager.get_instance(str(workspace_path))
-        logger.info("LSP manager initialized for workspace")
-    except ImportError:
-        logger.debug("LSP manager not available")
-    except Exception as e:
-        logger.debug(f"LSP manager initialization failed: {e}")
-
-    # Create summarization middleware for context auto-summarization
-    # This offloads full history to backend before summarizing to prevent context overflow
-    summarization_config = get_default_summarization_config()
-    summarization_middleware = create_summarization_middleware(
-        config=summarization_config,
-        backend=backend,
-    )
-    if summarization_middleware:
-        logger.info(
-            f"Summarization middleware enabled: trigger={summarization_config.trigger.description}"
-        )
-
-    # Load MCP tools from configured servers
-    mcp_tools = _load_mcp_tools()
-
-    # Load tool policy (if available) — used to skip denied tools before importing
-    tool_policy = None
-    try:
-        from ag3nt_agent.tool_policy import ToolPolicyManager
-        tool_policy = ToolPolicyManager()
-    except ImportError:
-        pass
-
-    # Load all registry tools via declarative loader
-    from ag3nt_agent.tool_registry import load_tools
-    registry_tools = load_tools(tool_policy=tool_policy)
-
-    # Get interactive tools (ask_user, etc.)
-    interactive_tools = get_interactive_tools()
-
-    # Import browser tools for main agent
-    from ag3nt_agent.browser_tool import get_browser_tools
-    browser_tools = get_browser_tools()
-
-    all_tools = [internet_search, fetch_url, schedule_reminder] + browser_tools + mcp_tools + registry_tools + interactive_tools
-    if mcp_tools:
-        logger.info(f"Agent initialized with {len(mcp_tools)} MCP tool(s)")
-
-    # Apply tool policy filter to remaining tools (built-ins + interactive)
-    if tool_policy is not None:
-        all_tools = tool_policy.filter_tools(all_tools)
-        logger.info(f"Tool policy applied: {len(all_tools)} tools available")
-
-    # System prompt with planning, memory, sub-agents, skills, and security
-    system_prompt = """You are AG3NT (AP3X), a helpful AI assistant with advanced capabilities.
+    return """You are AG3NT (AP3X), a helpful AI assistant with advanced capabilities.
 
 ## File System
 
@@ -1094,16 +984,16 @@ For modifying existing files, you have two primary tools:
 - Replaces entire file contents
 - Use for new files or major restructuring
 
-### When to use edit_file ✅
+### When to use edit_file
 
-- Changing a single value: `TIMEOUT = 30` → `TIMEOUT = 60`
+- Changing a single value: `TIMEOUT = 30` -> `TIMEOUT = 60`
 - Renaming a function across its definition
 - Fixing a bug in a specific code block
 - Updating imports or configuration values
 - Modifying docstrings or comments
 - Any targeted change where you know exact context
 
-### When to use write_file ✅
+### When to use write_file
 
 - Creating new files
 - Complete file restructuring or refactoring
@@ -1114,7 +1004,7 @@ For modifying existing files, you have two primary tools:
 
 **1. Include sufficient context**
 ```python
-# ✅ Good - includes context for unique match
+# Good - includes context for unique match
 edit_file(
     path="/workspace/app.py",
     old_str=\"\"\"def calculate_total(items):
@@ -1123,7 +1013,7 @@ edit_file(
     return sum(item.price for item in items)\"\"\"
 )
 
-# ❌ Bad - too vague, might match multiple places
+# Bad - too vague, might match multiple places
 edit_file(
     path="/workspace/app.py",
     old_str="return sum(items)",
@@ -1148,9 +1038,9 @@ edit_file(path="/workspace/config.py", old_str="...", new_str="...")
 
 **4. For multiple edits to same file, use multi_edit (or write_file for complete rewrites)**
 ```python
-# ✅ Use multi_edit for 2+ separate edits in one file
-# ✅ Use write_file only for complete rewrites
-# ❌ Don't chain multiple edit_file calls on same file
+# Use multi_edit for 2+ separate edits in one file
+# Use write_file only for complete rewrites
+# Don't chain multiple edit_file calls on same file
 ```
 
 ## Planning
@@ -1317,7 +1207,7 @@ You have Language Server Protocol integration that provides IDE-level code intel
 
 **Automatic diagnostics:** After every `edit_file` or `write_file`, LSP diagnostics (type errors,
 unused variables, etc.) and linter results (ruff, eslint, etc.) are automatically appended to the
-tool result. Pay attention to these — fix errors immediately rather than discovering them later.
+tool result. Pay attention to these -- fix errors immediately rather than discovering them later.
 
 **LSP navigation tool** (`lsp_tool`):
 ```python
@@ -1345,7 +1235,7 @@ Supported: Python (pyright), TypeScript/JavaScript, Go, Rust, C/C++, Ruby, PHP, 
 
 ## File Editing
 
-The `edit_file` tool uses **fuzzy matching** — if your old_string has minor whitespace or
+The `edit_file` tool uses **fuzzy matching** -- if your old_string has minor whitespace or
 indentation differences from the actual file content, it will still match. Strategies tried
 in order: exact match, line-trimmed, whitespace-normalized, indentation-flexible, block-anchor
 (Levenshtein similarity), context-aware matching.
@@ -1369,19 +1259,19 @@ Use `batch` to run multiple read-only tool calls concurrently:
 
 Every file modification (edit_file, write_file) is automatically snapshot-tracked. You can undo changes:
 
-- `undo_last()` — Undo the most recent file-modifying action. Restores workspace to pre-change state.
-- `undo_to(tool_call_id)` — Revert to before a specific tool call. Undoes ALL changes from that point onward.
-- `unrevert()` — Re-apply changes that were just undone (if you undo by mistake).
-- `show_undo_history(n=10)` — List recent file-modifying actions with their tool_call_ids.
+- `undo_last()` -- Undo the most recent file-modifying action. Restores workspace to pre-change state.
+- `undo_to(tool_call_id)` -- Revert to before a specific tool call. Undoes ALL changes from that point onward.
+- `unrevert()` -- Re-apply changes that were just undone (if you undo by mistake).
+- `show_undo_history(n=10)` -- List recent file-modifying actions with their tool_call_ids.
 
-This safety net means you can take risks confidently — any change can be rolled back instantly.
+This safety net means you can take risks confidently -- any change can be rolled back instantly.
 
 ## Browser Control
 
 You have web automation capabilities through browser tools that operate in two modes:
 
 **Live mode** (user can watch in Agent Browser UI):
-- `browser_start_session(url)` - Start a live browser session and navigate to a URL. Use this when the user asks you to "use the agent browser", "open in the browser", or when they want to see what you're doing. This starts the browser server if needed and connects automatically.
+- `browser_start_session(url)` - Start a live browser session and navigate to a URL.
 
 **All browser tools** (work in both live and headless mode):
 - `browser_navigate(url)` - Navigate to a URL
@@ -1392,11 +1282,31 @@ You have web automation capabilities through browser tools that operate in two m
 - `browser_wait_for(selector, state)` - Wait for elements to appear/disappear
 - `browser_close()` - Close browser when done
 
-**When to use which mode:**
-- If the user says "use the agent browser" or wants to watch: call `browser_start_session(url)` first, then use other tools as needed.
-- If the user just needs data scraped, a page checked, or background web tasks: use `browser_navigate` directly (runs headless, no visible window).
+Always call `browser_close()` when done to free resources.
 
-When a live session is active, all browser tools automatically route through it so the user sees every action. Always call `browser_close()` when done to free resources.
+## Image Generation & Editing
+
+You have AI-powered image generation and editing tools.
+
+**generate_image** - Create images from text prompts:
+```python
+generate_image("A futuristic cityscape at sunset with flying cars")
+generate_image("Product photo of headphones on marble", aspect_ratio="1:1", image_size="2K")
+generate_image("Infographic about climate change", aspect_ratio="16:9", output_path="/workspace/climate.png")
+```
+
+**edit_image** - Modify existing images with text instructions:
+```python
+edit_image("/workspace/photo.jpg", "Remove the person in the background")
+edit_image("/workspace/landscape.png", "Change the sky to a dramatic sunset")
+edit_image("/workspace/portrait.jpg", "Add soft studio lighting", output_path="/workspace/portrait_lit.png")
+```
+
+Tips:
+- Be specific and descriptive in prompts (style, lighting, composition)
+- Choose appropriate aspect ratios: 1:1 (square), 3:4/4:3 (portrait/landscape), 16:9 (widescreen), 9:16 (mobile)
+- Size options: 1K (standard), 2K (higher), 4K (highest quality)
+- Images are saved to the workspace directory
 
 ## Interactive Questions
 
@@ -1406,24 +1316,11 @@ You can ask the user for clarification during execution using **ask_user**:
 answer = ask_user(
     question="Which approach should I use?",
     options=["Approach A", "Approach B"],
-    allow_custom=True  # Allow user to provide custom answer
+    allow_custom=True
 )
 ```
 
-Use this when you need user input to proceed:
-- Choosing between multiple valid approaches
-- Confirming assumptions before taking action
-- Getting user preferences or requirements
-- Resolving ambiguity in the request
-- Obtaining information only the user knows
-
-**Best practices:**
-- Ask specific, clear questions
-- Provide options when there are clear choices
-- Only ask when truly necessary - don't over-ask
-- Explain why you need the information
-
-The execution will pause until the user responds.
+Use this when you need user input to proceed.
 
 ## Security and Permissions
 
@@ -1434,11 +1331,6 @@ Some tools require human approval before execution. These include:
 
 When your execution is paused for approval, the user will see a description of the
 action you're attempting. Wait patiently for their decision.
-
-Skills may also declare `required_permissions` in their YAML frontmatter. When using a skill:
-1. **Check permissions**: Read the skill's `required_permissions` field before executing
-2. **Note sensitive actions**: When a skill requires sensitive permissions, acknowledge this
-3. **Proceed with care**: Be conservative with destructive actions
 
 Be concise and helpful.
 
@@ -1451,12 +1343,11 @@ When working with Git:
 1. **Review changes first:**
    ```python
    status = git_status()
-   diff = git_diff()  # See what will be committed
+   diff = git_diff()
    ```
 
 2. **Use smart_commit for auto-generated messages:**
    ```python
-   # Automatically generates conventional commit message
    result = git.smart_commit(
        files=["src/auth.py", "tests/test_auth.py"],
        auto_generate=True
@@ -1482,38 +1373,153 @@ When working with Git:
 Use `create_pull_request` to automate PR creation:
 
 ```python
-# Auto-generated title and description from commits
 result = git.create_pull_request(
     base="main",
     auto_generate=True
 )
-# Returns PR URL
 ```
 
 **Prerequisites:**
 - GitHub CLI (`gh`) must be installed
 - Branch must be pushed to remote
-- Repository must be on GitHub
+- Repository must be on GitHub"""
 
-**Manual PR creation:**
-```python
-result = git.create_pull_request(
-    title="feat: Add user authentication system",
-    body='''## Summary
-Implements JWT-based authentication.
 
-## Changes
-- Added auth middleware
-- Created login/logout endpoints
-- Added token validation
+def _build_agent() -> CompiledStateGraph:
+    """Build and return the DeepAgents agent graph.
 
-## Testing
-- Unit tests pass
-- Tested manually with Postman
-''',
-    base="main"
-)
-```"""
+    Returns:
+        Configured DeepAgents graph
+
+    Raises:
+        ValueError: If required API keys are missing for the selected provider
+    """
+    from deepagents import create_deep_agent
+    from langgraph.checkpoint.memory import MemorySaver
+
+    model = _create_model()
+
+    # Get repo root for skill discovery and file operations
+    repo_root = _get_repo_root()
+
+    # Discover available skill sources
+    skill_sources = _get_skill_sources(repo_root)
+
+    # Create backend with multi-root support (skills + user data)
+    backend = _build_backend(repo_root)
+
+    # Get memory sources (AGENTS.md, MEMORY.md)
+    memory_sources = _get_memory_sources()
+
+    # Create sub-agents (Researcher, Coder)
+    subagents = _create_subagents()
+
+    # Get interrupt_on configuration for risky tools
+    interrupt_on = _get_interrupt_on_config()
+
+    # Use MemorySaver for checkpoints (supports both sync and async)
+    # Note: SqliteSaver doesn't support async methods, and AsyncSqliteSaver
+    # requires async context management which is complex for our use case.
+    # MemorySaver works reliably for both sync and async agent execution.
+    checkpointer = MemorySaver()
+    logger.info("Using MemorySaver checkpointer")
+
+    # Create shell middleware for command execution
+    # Uses ~/.ag3nt/workspace/ as the working directory
+    workspace_path = _get_user_data_path() / "workspace"
+    workspace_path.mkdir(exist_ok=True)
+    shell_middleware = ShellMiddleware(
+        workspace_root=str(workspace_path),
+        timeout=60.0,  # 60 second timeout
+        max_output_bytes=100_000,  # 100KB output limit
+    )
+
+    # Start file watcher for external change detection
+    try:
+        from ag3nt_agent.file_watcher import FileWatcher
+        from ag3nt_agent.file_tracker import FileTracker
+        from ag3nt_agent.agent_config import FILE_WATCHER_DEBOUNCE
+
+        def _on_file_change(file_path: str, event_type: str) -> None:
+            """Invalidate FileTracker entries when files change externally."""
+            try:
+                tracker = FileTracker.get_instance()
+                tracker.invalidate_all_sessions(file_path)
+            except Exception:
+                logger.debug("Failed to invalidate file tracker for %s", file_path)
+
+        watcher = FileWatcher.get_instance()
+        watcher.start(str(workspace_path), debounce_seconds=FILE_WATCHER_DEBOUNCE)
+        watcher.on_change(_on_file_change)
+        logger.info("File watcher started for workspace")
+    except ImportError:
+        logger.debug("watchdog not installed — file watcher disabled")
+
+    # Initialize path protection for external directory access control
+    path_protection_middleware = None
+    try:
+        from ag3nt_agent.tool_policy import PathProtection, PathProtectionMiddleware
+        path_protection = PathProtection.get_instance(str(workspace_path))
+        path_protection_middleware = PathProtectionMiddleware(path_protection)
+        logger.info("Path protection initialized for workspace")
+    except ImportError:
+        pass
+
+    # Initialize LSP manager for post-edit diagnostics and code navigation
+    try:
+        from ag3nt_agent.lsp.manager import LspManager
+        LspManager.get_instance(str(workspace_path))
+        logger.info("LSP manager initialized for workspace")
+    except ImportError:
+        logger.debug("LSP manager not available")
+    except Exception as e:
+        logger.debug(f"LSP manager initialization failed: {e}")
+
+    # Create summarization middleware for context auto-summarization
+    # This offloads full history to backend before summarizing to prevent context overflow
+    summarization_config = get_default_summarization_config()
+    summarization_middleware = create_summarization_middleware(
+        config=summarization_config,
+        backend=backend,
+    )
+    if summarization_middleware:
+        logger.info(
+            f"Summarization middleware enabled: trigger={summarization_config.trigger.description}"
+        )
+
+    # Load MCP tools from configured servers
+    mcp_tools = _load_mcp_tools()
+
+    # Load tool policy (if available) — used to skip denied tools before importing
+    tool_policy = None
+    try:
+        from ag3nt_agent.tool_policy import ToolPolicyManager
+        tool_policy = ToolPolicyManager()
+    except ImportError:
+        pass
+
+    # Load all registry tools via declarative loader
+    from ag3nt_agent.tool_registry import load_tools
+    registry_tools = load_tools(tool_policy=tool_policy)
+
+    # Get interactive tools (ask_user, etc.)
+    interactive_tools = get_interactive_tools()
+
+    # Import browser tools for main agent
+    from ag3nt_agent.browser_tool import get_browser_tools
+    browser_tools = get_browser_tools()
+
+    all_tools = [internet_search, fetch_url, schedule_reminder] + browser_tools + mcp_tools + registry_tools + interactive_tools
+    if mcp_tools:
+        logger.info(f"Agent initialized with {len(mcp_tools)} MCP tool(s)")
+
+    # Apply tool policy filter to remaining tools (built-ins + interactive)
+    if tool_policy is not None:
+        all_tools = tool_policy.filter_tools(all_tools)
+        logger.info(f"Tool policy applied: {len(all_tools)} tools available")
+
+    # System prompt — uses shared function for consistency with UI agent
+    system_prompt = _get_system_prompt()
 
     # Build middleware list
     # Note: create_deep_agent already adds TodoListMiddleware internally
@@ -1681,9 +1687,6 @@ def _extract_interrupt_info(result: dict[str, Any]) -> dict[str, Any] | None:
             }
 
     # Otherwise, handle as tool approval interrupt
-    # Extract action requests and review configs
-    review_configs = interrupt_value.get("review_configs", [])
-
     # Format pending actions for display
     pending_actions = []
     for action in action_requests:
@@ -1821,11 +1824,14 @@ def run_turn(
     messages = [HumanMessage(content=text)]
 
     # Configure the run with session-specific thread_id for checkpointing
-    config = {
+    # Pass metadata through so middleware (PlanningMiddleware, etc.) can read it
+    config: dict[str, Any] = {
         "configurable": {
             "thread_id": session_id,
-        }
+        },
     }
+    if metadata:
+        config["metadata"] = metadata
 
     # Invoke the agent
     try:
@@ -1841,8 +1847,9 @@ def run_turn(
     # Check for interrupt (approval required)
     interrupt_info = _extract_interrupt_info(result)
     if interrupt_info:
-        # Store interrupt IDs for resume
-        _pending_interrupt_ids[session_id] = interrupt_info.get("interrupt_ids", [interrupt_info["interrupt_id"]])
+        # Store interrupt IDs for resume (thread-safe)
+        with _pending_interrupt_ids_lock:
+            _pending_interrupt_ids[session_id] = interrupt_info.get("interrupt_ids", [interrupt_info["interrupt_id"]])
         # Format the pending actions for the user
         action_text = "\n\n".join(
             action["description"] for action in interrupt_info["pending_actions"]
@@ -1855,7 +1862,8 @@ def run_turn(
         }
 
     # No interrupt — clear any stale pending IDs
-    _pending_interrupt_ids.pop(session_id, None)
+    with _pending_interrupt_ids_lock:
+        _pending_interrupt_ids.pop(session_id, None)
 
     # Extract response
     response_text, events = _extract_response(result)
@@ -1902,19 +1910,17 @@ def resume_turn(
     }
 
     # Build resume Commands — one per pending interrupt, tagged with its ID
-    stored_ids = _pending_interrupt_ids.pop(session_id, [])
+    with _pending_interrupt_ids_lock:
+        stored_ids = _pending_interrupt_ids.pop(session_id, [])
     if len(stored_ids) > 1:
-        # Multiple pending interrupts — distribute decisions across them
-        # Each interrupt gets its share of the decisions list
+        # Multiple pending interrupts — one Command per interrupt
         resume_input: Any = [
-            Command(resume={"decisions": decisions}, id=iid)
-            for iid in stored_ids
+            Command(resume={"decisions": decisions})
+            for _iid in stored_ids
         ]
     elif stored_ids:
-        # Single interrupt — include ID for safety
-        resume_input = Command(resume={"decisions": decisions}, id=stored_ids[0])
+        resume_input = Command(resume={"decisions": decisions})
     else:
-        # Fallback: no stored IDs (legacy path)
         resume_input = Command(resume={"decisions": decisions})
 
     try:
@@ -1930,8 +1936,9 @@ def resume_turn(
     # Check for another interrupt
     interrupt_info = _extract_interrupt_info(result)
     if interrupt_info:
-        # Store new interrupt IDs for next resume
-        _pending_interrupt_ids[session_id] = interrupt_info.get("interrupt_ids", [interrupt_info["interrupt_id"]])
+        # Store new interrupt IDs for next resume (thread-safe)
+        with _pending_interrupt_ids_lock:
+            _pending_interrupt_ids[session_id] = interrupt_info.get("interrupt_ids", [interrupt_info["interrupt_id"]])
         action_text = "\n\n".join(
             action["description"] for action in interrupt_info["pending_actions"]
         )
@@ -1943,7 +1950,8 @@ def resume_turn(
         }
 
     # No interrupt — clear any stale pending IDs
-    _pending_interrupt_ids.pop(session_id, None)
+    with _pending_interrupt_ids_lock:
+        _pending_interrupt_ids.pop(session_id, None)
 
     # Extract response
     response_text, events = _extract_response(result)
@@ -1968,7 +1976,7 @@ def resume_turn(
 # - Decision engine for act/ask decisions based on confidence
 # - Learning engine for tracking action outcomes
 
-_autonomous_runtime: "AutonomousRuntime | None" = None
+_autonomous_runtime_legacy: "AutonomousRuntime | None" = None
 
 
 class AutonomousRuntime:
@@ -1978,7 +1986,7 @@ class AutonomousRuntime:
     to provide autonomous goal execution with human-in-the-loop controls.
 
     Usage:
-        runtime = get_autonomous_runtime()
+        runtime = AutonomousRuntime()
         await runtime.start()
 
         # Publish events from monitors/triggers
@@ -2190,8 +2198,8 @@ class AutonomousRuntime:
         self.goal_manager.add_goal(goal)
 
 
-def get_autonomous_runtime(goals_dir: Path | None = None) -> AutonomousRuntime:
-    """Get or create the autonomous runtime singleton.
+def get_legacy_autonomous_runtime(goals_dir: Path | None = None) -> AutonomousRuntime:
+    """Get or create the legacy autonomous runtime singleton.
 
     Args:
         goals_dir: Optional goals configuration directory
@@ -2199,25 +2207,280 @@ def get_autonomous_runtime(goals_dir: Path | None = None) -> AutonomousRuntime:
     Returns:
         The AutonomousRuntime instance
     """
-    global _autonomous_runtime
-    if _autonomous_runtime is None:
-        _autonomous_runtime = AutonomousRuntime(goals_dir=goals_dir)
-    return _autonomous_runtime
+    global _autonomous_runtime_legacy
+    if _autonomous_runtime_legacy is None:
+        _autonomous_runtime_legacy = AutonomousRuntime(goals_dir=goals_dir)
+    return _autonomous_runtime_legacy
 
 
-async def start_autonomous_system(goals_dir: Path | None = None) -> AutonomousRuntime:
-    """Initialize and start the autonomous system.
+# =============================================================================
+# AUTONOMOUS SYSTEM BOOTSTRAP
+# =============================================================================
+# Full autonomous system lifecycle management. Wires together all subsystems:
+#   EventBus, PhaseHookManager, LoopManager, IntelligenceWorker,
+#   ConsolidationLoop, SessionTrustTracker, and the legacy AutonomousRuntime.
+#
+# Each subsystem is imported lazily and wrapped in try/except so that
+# partial startup is possible when optional dependencies are missing.
+# =============================================================================
 
-    Convenience function for starting the autonomous runtime.
+_autonomous_runtime: dict[str, Any] | None = None
+
+
+async def start_autonomous_system(config: dict | None = None) -> dict:
+    """Initialize and start all autonomous subsystems.
+
+    Bootstrap order:
+    1. EventBus (central event routing)
+    2. PhaseHookManager + safety hooks
+    3. LoopManager (all reactive loops)
+    4. IntelligenceWorker (daemon thread with MetaLoop)
+    5. ConsolidationLoop (end-of-session memory extraction)
+    6. SessionTrustTracker (tiered approval)
+    7. Legacy AutonomousRuntime (goal-based event processing)
+
+    Args:
+        config: The ``autonomous`` section from default-config.yaml.
+                If None, sensible defaults are used.
+
+    Returns:
+        A dict of ``{"component_name": instance}`` for all started subsystems.
     """
-    runtime = get_autonomous_runtime(goals_dir)
-    await runtime.start()
+    global _autonomous_runtime
+
+    if _autonomous_runtime is not None:
+        logger.debug("Autonomous system already running — returning existing runtime")
+        return _autonomous_runtime
+
+    cfg = config or {}
+    runtime: dict[str, Any] = {}
+
+    # ── 1. EventBus ──────────────────────────────────────────────────────
+    bus = None
+    try:
+        from ag3nt_agent.autonomous.event_bus import EventBus
+
+        bus = EventBus()
+        runtime["event_bus"] = bus
+        logger.info("Autonomous bootstrap: EventBus created")
+    except Exception as exc:
+        logger.error("Autonomous bootstrap: failed to create EventBus: %s", exc)
+
+    # ── 2. PhaseHookManager ──────────────────────────────────────────────
+    try:
+        from ag3nt_agent.hooks import PhaseHookManager
+
+        hook_manager = PhaseHookManager()
+        hook_manager.start()
+        runtime["hook_manager"] = hook_manager
+        logger.info("Autonomous bootstrap: PhaseHookManager started")
+    except Exception as exc:
+        logger.warning("Autonomous bootstrap: PhaseHookManager unavailable: %s", exc)
+
+    # ── 3. LoopManager ───────────────────────────────────────────────────
+    if bus is not None:
+        try:
+            from ag3nt_agent.loops import LoopManager, LoopManagerConfig
+
+            failover_cfg = cfg.get("provider_failover", {})
+            loop_config = LoopManagerConfig(
+                quality_gate_enabled=cfg.get("quality_gate", {}).get("enabled", True),
+                recovery_enabled=cfg.get("autofix", {}).get("enabled", True),
+                failover_enabled=failover_cfg.get("enabled", True),
+            )
+            loop_manager = LoopManager(bus, config=loop_config)
+            await loop_manager.start_all()
+            runtime["loop_manager"] = loop_manager
+            logger.info("Autonomous bootstrap: LoopManager started (%s)", loop_manager.loop_names)
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: LoopManager unavailable: %s", exc)
+
+    # ── 4. IntelligenceWorker (daemon thread) ────────────────────────────
+    intel_cfg = cfg.get("intelligence", {})
+    if intel_cfg.get("enabled", True) and bus is not None:
+        try:
+            from ag3nt_agent.intelligence.metaloop import MetaLoop
+            from ag3nt_agent.intelligence.worker import IntelligenceWorker
+
+            metaloop = MetaLoop(
+                bus=bus,
+                tick_interval_s=float(intel_cfg.get("tick_interval_s", 10)),
+            )
+
+            # Register available intelligence loops
+            _register_intelligence_loops(metaloop, bus)
+
+            worker = IntelligenceWorker(metaloop)
+            worker.start()
+            runtime["metaloop"] = metaloop
+            runtime["intelligence_worker"] = worker
+            logger.info("Autonomous bootstrap: IntelligenceWorker started")
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: IntelligenceWorker unavailable: %s", exc)
+
+    # ── 5. ConsolidationLoop ─────────────────────────────────────────────
+    if bus is not None:
+        try:
+            from ag3nt_agent.intelligence.consolidation import ConsolidationLoop
+
+            consolidation = ConsolidationLoop(bus)
+            await consolidation.start()
+            runtime["consolidation_loop"] = consolidation
+            logger.info("Autonomous bootstrap: ConsolidationLoop started")
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: ConsolidationLoop unavailable: %s", exc)
+
+    # ── 6. SessionTrustTracker (tiered approval) ─────────────────────────
+    approval_cfg = cfg.get("approval", {})
+    if approval_cfg.get("tiered", True):
+        try:
+            from ag3nt_agent.approval.trust import SessionTrustTracker
+
+            threshold = int(approval_cfg.get("trust_escalation_threshold", 3))
+            trust_tracker = SessionTrustTracker(threshold=threshold)
+            runtime["trust_tracker"] = trust_tracker
+            logger.info(
+                "Autonomous bootstrap: SessionTrustTracker created (threshold=%d)",
+                threshold,
+            )
+        except Exception as exc:
+            logger.warning("Autonomous bootstrap: SessionTrustTracker unavailable: %s", exc)
+
+    # ── 7. Legacy AutonomousRuntime (goal-based event processing) ────────
+    try:
+        legacy = get_legacy_autonomous_runtime()
+        await legacy.start()
+        runtime["legacy_runtime"] = legacy
+        logger.info("Autonomous bootstrap: legacy AutonomousRuntime started")
+    except Exception as exc:
+        logger.warning("Autonomous bootstrap: legacy AutonomousRuntime unavailable: %s", exc)
+
+    _autonomous_runtime = runtime
+    logger.info(
+        "Autonomous system started: %d/%d subsystems active — %s",
+        len(runtime),
+        7,
+        ", ".join(runtime.keys()),
+    )
     return runtime
 
 
+def _register_intelligence_loops(metaloop: Any, bus: Any) -> None:
+    """Register available intelligence loops with the MetaLoop.
+
+    Each loop is imported lazily; failures are logged and skipped.
+    """
+    # Sentinel — codebase knowledge graph
+    try:
+        from ag3nt_agent.intelligence.sentinel import SentinelLoop
+
+        sentinel = SentinelLoop(bus)
+        metaloop.register_loop("sentinel", sentinel, budget=0.15)
+    except Exception as exc:
+        logger.debug("Intelligence loop 'sentinel' unavailable: %s", exc)
+
+    # Self-Healing — failure pattern detection and remediation
+    try:
+        from ag3nt_agent.intelligence.healing import SelfHealingIntelligenceLoop
+
+        healing = SelfHealingIntelligenceLoop(bus)
+        metaloop.register_loop("healing", healing, budget=0.10)
+    except Exception as exc:
+        logger.debug("Intelligence loop 'healing' unavailable: %s", exc)
+
+    # Quality — output quality analysis
+    try:
+        from ag3nt_agent.intelligence.quality import QualityGuardianLoop
+
+        quality_loop = QualityGuardianLoop(bus)
+        metaloop.register_loop("quality", quality_loop, budget=0.10)
+    except Exception as exc:
+        logger.debug("Intelligence loop 'quality' unavailable: %s", exc)
+
+    # Exploration — proactive codebase exploration
+    try:
+        from ag3nt_agent.intelligence.exploration import ParallelExplorationLoop
+
+        exploration = ParallelExplorationLoop(bus)
+        metaloop.register_loop("exploration", exploration, budget=0.05)
+    except Exception as exc:
+        logger.debug("Intelligence loop 'exploration' unavailable: %s", exc)
+
+
 async def stop_autonomous_system() -> None:
-    """Stop the autonomous system."""
+    """Gracefully shutdown all autonomous subsystems.
+
+    Shutdown order (reverse of startup):
+    1. Legacy AutonomousRuntime
+    2. SessionTrustTracker (no teardown needed)
+    3. ConsolidationLoop (final memory extraction)
+    4. IntelligenceWorker
+    5. LoopManager
+    6. PhaseHookManager
+    7. EventBus (no teardown needed)
+    """
     global _autonomous_runtime
-    if _autonomous_runtime is not None:
-        await _autonomous_runtime.stop()
-        _autonomous_runtime = None
+
+    if _autonomous_runtime is None:
+        logger.debug("Autonomous system not running — nothing to stop")
+        return
+
+    runtime = _autonomous_runtime
+
+    # ── 1. Legacy AutonomousRuntime ──────────────────────────────────────
+    legacy = runtime.get("legacy_runtime")
+    if legacy is not None:
+        try:
+            await legacy.stop()
+            logger.info("Autonomous shutdown: legacy AutonomousRuntime stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: legacy AutonomousRuntime error: %s", exc)
+
+    # ── 2. ConsolidationLoop ─────────────────────────────────────────────
+    consolidation = runtime.get("consolidation_loop")
+    if consolidation is not None:
+        try:
+            await consolidation.stop()
+            logger.info("Autonomous shutdown: ConsolidationLoop stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: ConsolidationLoop error: %s", exc)
+
+    # ── 3. IntelligenceWorker ────────────────────────────────────────────
+    worker = runtime.get("intelligence_worker")
+    if worker is not None:
+        try:
+            worker.stop()
+            logger.info("Autonomous shutdown: IntelligenceWorker stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: IntelligenceWorker error: %s", exc)
+
+    # ── 4. LoopManager ───────────────────────────────────────────────────
+    loop_manager = runtime.get("loop_manager")
+    if loop_manager is not None:
+        try:
+            await loop_manager.stop_all()
+            logger.info("Autonomous shutdown: LoopManager stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: LoopManager error: %s", exc)
+
+    # ── 5. PhaseHookManager ──────────────────────────────────────────────
+    hook_manager = runtime.get("hook_manager")
+    if hook_manager is not None:
+        try:
+            hook_manager.stop()
+            logger.info("Autonomous shutdown: PhaseHookManager stopped")
+        except Exception as exc:
+            logger.error("Autonomous shutdown: PhaseHookManager error: %s", exc)
+
+    _autonomous_runtime = None
+    logger.info("Autonomous system fully stopped")
+
+
+def get_autonomous_runtime() -> dict[str, Any] | None:
+    """Get the current autonomous runtime, or None if not started.
+
+    Returns:
+        A dict of ``{"component_name": instance}`` for all active subsystems,
+        or ``None`` if :func:`start_autonomous_system` has not been called.
+    """
+    return _autonomous_runtime

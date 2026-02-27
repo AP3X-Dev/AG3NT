@@ -24,7 +24,6 @@ security:
   autoApprove: false
   # Tools that ALWAYS require approval, even in auto-approve mode
   alwaysRequireApproval:
-    - execute
     - delete_file
     - send_message
   # Tools exempt from approval (empty = follow normal rules)
@@ -32,7 +31,9 @@ security:
   # Timeout for approval requests in seconds (0 = no timeout)
   approvalTimeoutSeconds: 0
   # Pre-approved session patterns (e.g., 'telegram:*:12345')
-  allowlist: []
+  # cli:* auto-pairs all CLI/HTTP API sessions (Scribo, TUI, curl, etc.)
+  allowlist:
+    - "cli:*"
 
 channels:
   enabled: []
@@ -60,6 +61,39 @@ scheduler:
   #     sessionMode: isolated
   #     name: "Weekly Summary"
   cron: []
+
+autonomous:
+  # Master switch for the autonomous system
+  enabled: true
+  autofix:
+    # Self-healing engine that monitors health and retries failures
+    enabled: true
+    health_check_interval_s: 30
+    max_retry_attempts: 4
+  intelligence:
+    # Background intelligence loops (sentinel, healing, consolidation, etc.)
+    enabled: true
+    tick_interval_s: 10
+    whisper_mode: true
+  quality_gate:
+    # Quality gate loop that validates outputs before delivery
+    enabled: true
+    auto_fix_retries: 3
+  approval:
+    # Tiered approval with trust escalation
+    tiered: true
+    trust_escalation_threshold: 3
+  heartbeat:
+    # Periodic heartbeat daemon (sends status events)
+    enabled: false
+    interval_s: 1800
+  cron:
+    # Cron-based scheduled tasks
+    enabled: false
+  provider_failover:
+    # Automatic provider failover on consecutive failures
+    enabled: true
+    consecutive_failures: 3
 
 nodes:
   # Companion nodes (remote devices) - empty by default
