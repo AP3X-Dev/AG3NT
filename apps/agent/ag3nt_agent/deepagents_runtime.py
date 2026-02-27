@@ -1609,6 +1609,30 @@ def _build_agent() -> CompiledStateGraph:
     if path_protection_middleware:
         middleware_list.append(path_protection_middleware)
 
+    # Safety hooks middleware (wraps tool calls with PRE/POST hooks)
+    safety_hook_middleware = None
+    try:
+        from ag3nt_agent.hooks import PhaseHookManager
+        from ag3nt_agent.hooks.middleware import HookMiddleware
+        from ag3nt_agent.hooks.agent_middleware import SafetyHookAgentMiddleware
+
+        hook_manager = PhaseHookManager()
+        hook_manager.start()
+        hook_mw = HookMiddleware(hook_manager)
+        safety_hook_middleware = SafetyHookAgentMiddleware(hook_mw)
+
+        # Register safety hooks (protect_core, block_danger, compile_check)
+        try:
+            from ag3nt_agent.hooks.safety import register_safety_hooks
+            register_safety_hooks(hook_manager)
+        except Exception:
+            pass
+    except ImportError:
+        logger.debug("Safety hooks middleware not available")
+
+    if safety_hook_middleware:
+        middleware_list.append(safety_hook_middleware)
+
     agent = create_deep_agent(
         model=model,
         system_prompt=system_prompt,
@@ -1867,6 +1891,51 @@ def _extract_usage_info(result: dict[str, Any]) -> dict[str, Any]:
     return usage
 
 
+def _maybe_compact_history(
+    agent: CompiledStateGraph,
+    config: dict[str, Any],
+    session_id: str,
+) -> None:
+    """Run per-turn compaction check on the checkpoint message history.
+
+    If the message count or token count exceeds the configured thresholds,
+    the CompactionMiddleware pipeline (masking, flush, pruning, progressive
+    summarization) is applied and the checkpoint state is updated so the
+    *next* turn starts with a compacted history.
+
+    This is intentionally a no-op when the ``compaction_middleware`` module
+    is unavailable or when any step raises an exception — the agent should
+    never fail because of compaction bookkeeping.
+    """
+    try:
+        from ag3nt_agent.compaction_middleware import get_compaction_middleware
+
+        compaction_mw = get_compaction_middleware()
+
+        # Get current message history from checkpointer state
+        checkpoint_state = agent.get_state(config)
+        current_messages = checkpoint_state.values.get("messages", [])
+
+        if compaction_mw.should_compact(current_messages):
+            compacted_msgs, metrics = compaction_mw.compact(
+                current_messages, session_id=session_id
+            )
+            if metrics.triggered:
+                # Update checkpoint state with compacted messages
+                agent.update_state(config, {"messages": compacted_msgs})
+                logger.info(
+                    "Compaction applied: %d->%d messages, %d->%d tokens",
+                    metrics.messages_before,
+                    metrics.messages_after,
+                    metrics.tokens_before,
+                    metrics.tokens_after,
+                )
+    except ImportError:
+        pass  # CompactionMiddleware not available
+    except Exception as exc:
+        logger.debug("Compaction check failed: %s", exc, exc_info=True)
+
+
 def run_turn(
     session_id: str,
     text: str,
@@ -1951,6 +2020,9 @@ def run_turn(
     for ev in events:
         response_chars += len(str(ev.get("output", "")))
     _emit_turn_completed(session_id=session_id, char_count=response_chars)
+
+    # Per-turn compaction: compact history if context is too large
+    _maybe_compact_history(agent, config, session_id)
 
     return {
         "session_id": session_id,
@@ -2039,6 +2111,9 @@ def resume_turn(
 
     # Extract usage information from response metadata
     usage = _extract_usage_info(result)
+
+    # Per-turn compaction: compact history if context is too large
+    _maybe_compact_history(agent, config, session_id)
 
     return {
         "session_id": session_id,
