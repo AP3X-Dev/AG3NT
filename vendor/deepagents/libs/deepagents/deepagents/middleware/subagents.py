@@ -476,6 +476,39 @@ def _create_task_tool(
         # If custom description has placeholder, format with agent descriptions
         task_description = task_description.format(available_agents=subagent_description_str)
 
+    def _start_monitoring(runtime, subagent_type, description):
+        """Start monitoring, returns (monitor, exec_id) or (None, None)."""
+        try:
+            from ag3nt_agent.subagent_monitor import get_subagent_monitor
+            monitor = get_subagent_monitor()
+            execution = monitor.start_execution(
+                parent_id=runtime.tool_call_id or "unknown",
+                subagent_type=subagent_type,
+                task=description[:500],
+            )
+            return monitor, execution.id
+        except Exception:
+            logger.debug("Subagent monitor unavailable, skipping lifecycle tracking", exc_info=True)
+            return None, None
+
+    def _end_monitoring(monitor, exec_id, result=None, error=None):
+        """End monitoring with result or error."""
+        if not exec_id or not monitor:
+            return
+        try:
+            result_text = None
+            if error is None and isinstance(result, dict):
+                msgs = result.get("messages", [])
+                if msgs:
+                    last_msg = msgs[-1]
+                    result_text = str(getattr(last_msg, "content", ""))[:500]
+            if error:
+                monitor.end_execution(exec_id, error=str(error)[:500])
+            else:
+                monitor.end_execution(exec_id, result=result_text)
+        except Exception:
+            logger.debug("Failed to record subagent execution end", exc_info=True)
+
     def task(
         description: Annotated[
             str,
@@ -494,43 +527,15 @@ def _create_task_tool(
                 return f"We cannot invoke subagent {subagent_type} because it does not exist, the only allowed types are {allowed_types}"
         subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
 
-        # Monitor subagent lifecycle
-        exec_id = None
-        monitor = None
-        try:
-            from ag3nt_agent.subagent_monitor import get_subagent_monitor
-            monitor = get_subagent_monitor()
-            execution = monitor.start_execution(
-                parent_id=runtime.tool_call_id or "unknown",
-                subagent_type=subagent_type,
-                task=description[:500],  # Truncate to avoid huge stored strings
-            )
-            exec_id = execution.id
-        except Exception:
-            pass  # Monitor is optional, don't break subagent execution
+        monitor, exec_id = _start_monitoring(runtime, subagent_type, description)
 
         try:
             result = subagent.invoke(subagent_state)
         except Exception as e:
-            if exec_id and monitor:
-                try:
-                    monitor.end_execution(exec_id, error=str(e))
-                except Exception:
-                    pass
+            _end_monitoring(monitor, exec_id, error=e)
             raise
 
-        if exec_id and monitor:
-            try:
-                # Extract result text for logging
-                result_text = None
-                if isinstance(result, dict):
-                    msgs = result.get("messages", [])
-                    if msgs:
-                        last_msg = msgs[-1]
-                        result_text = str(getattr(last_msg, "content", ""))[:500]
-                monitor.end_execution(exec_id, result=result_text)
-            except Exception:
-                pass
+        _end_monitoring(monitor, exec_id, result=result)
 
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
@@ -555,43 +560,15 @@ def _create_task_tool(
                 return f"We cannot invoke subagent {subagent_type} because it does not exist, the only allowed types are {allowed_types}"
         subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
 
-        # Monitor subagent lifecycle
-        exec_id = None
-        monitor = None
-        try:
-            from ag3nt_agent.subagent_monitor import get_subagent_monitor
-            monitor = get_subagent_monitor()
-            execution = monitor.start_execution(
-                parent_id=runtime.tool_call_id or "unknown",
-                subagent_type=subagent_type,
-                task=description[:500],  # Truncate to avoid huge stored strings
-            )
-            exec_id = execution.id
-        except Exception:
-            pass  # Monitor is optional, don't break subagent execution
+        monitor, exec_id = _start_monitoring(runtime, subagent_type, description)
 
         try:
             result = await subagent.ainvoke(subagent_state)
         except Exception as e:
-            if exec_id and monitor:
-                try:
-                    monitor.end_execution(exec_id, error=str(e))
-                except Exception:
-                    pass
+            _end_monitoring(monitor, exec_id, error=e)
             raise
 
-        if exec_id and monitor:
-            try:
-                # Extract result text for logging
-                result_text = None
-                if isinstance(result, dict):
-                    msgs = result.get("messages", [])
-                    if msgs:
-                        last_msg = msgs[-1]
-                        result_text = str(getattr(last_msg, "content", ""))[:500]
-                monitor.end_execution(exec_id, result=result_text)
-            except Exception:
-                pass
+        _end_monitoring(monitor, exec_id, result=result)
 
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
