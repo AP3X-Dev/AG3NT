@@ -271,9 +271,7 @@ class ToolResultCache:
             for key, (tool_name, args) in self._key_to_args.items():
                 # Check if the path appears in any argument value
                 for arg_value in args.values():
-                    if isinstance(arg_value, str) and (
-                        path in arg_value or arg_value in path
-                    ):
+                    if isinstance(arg_value, str) and path in arg_value:
                         keys_to_remove.append(key)
                         break
 

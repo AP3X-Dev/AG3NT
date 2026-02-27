@@ -1456,14 +1456,15 @@ result = git.create_pull_request(
 
 
 def _wrap_tools_with_cache(all_tools: list) -> list:
-    """Wrap cacheable tools with result caching and add write-operation invalidation.
+    """Wrap cacheable tools with result caching and shell invalidation.
 
     For read-only tools (read_file, glob_tool, grep_tool, etc.), wraps the tool
     so results are cached on first call and returned from cache on subsequent
     identical calls.
 
-    For write tools (write_file, edit_file), adds post-execution cache
-    invalidation for the affected path. For shell, invalidates the entire cache.
+    For exec_command (shell), invalidates the entire cache after execution.
+    Write-triggered invalidation for vendor built-ins (write_file, edit_file)
+    is handled implicitly via shell/exec_command full cache clear.
 
     Args:
         all_tools: List of LangChain tool objects.
@@ -1477,10 +1478,12 @@ def _wrap_tools_with_cache(all_tools: list) -> list:
         logger.debug("tool_cache not available, skipping cache wrappers")
         return all_tools
 
+    from functools import wraps
+
     cache = get_tool_cache()
     cacheable_names = ToolResultCache.CACHEABLE_TOOLS
-    write_tools = {"write_file", "edit_file"}
-    shell_tools = {"shell", "shell_tool", "exec_command"}
+    # Only exec_command is a registered tool; "shell" / "shell_tool" don't exist.
+    shell_tools = {"exec_command"}
 
     wrapped: list = []
     for t in all_tools:
@@ -1495,7 +1498,6 @@ def _wrap_tools_with_cache(all_tools: list) -> list:
 
             def _make_cached_func(orig, name):
                 """Create a closure that captures orig and name."""
-                from functools import wraps
 
                 @wraps(orig)
                 def cached_func(*args, **kwargs):
@@ -1510,26 +1512,8 @@ def _wrap_tools_with_cache(all_tools: list) -> list:
                 return cached_func
 
             t.func = _make_cached_func(original_func, tool_name)
-            wrapped.append(t)
-
-        elif tool_name in write_tools:
-            # Wrap write tool with post-execution cache invalidation
-            original_func = t.func
-
-            def _make_write_func(orig, name):
-                from functools import wraps
-
-                @wraps(orig)
-                def write_func(*args, **kwargs):
-                    result = orig(*args, **kwargs)
-                    path = kwargs.get("path", "") or kwargs.get("file_path", "")
-                    if path:
-                        cache.invalidate_path(path)
-                    return result
-
-                return write_func
-
-            t.func = _make_write_func(original_func, tool_name)
+            # Force LangGraph to route async (ainvoke) through the sync wrapper
+            t.coroutine = None
             wrapped.append(t)
 
         elif tool_name in shell_tools:
@@ -1537,7 +1521,6 @@ def _wrap_tools_with_cache(all_tools: list) -> list:
             original_func = t.func
 
             def _make_shell_func(orig):
-                from functools import wraps
 
                 @wraps(orig)
                 def shell_func(*args, **kwargs):
@@ -1548,6 +1531,8 @@ def _wrap_tools_with_cache(all_tools: list) -> list:
                 return shell_func
 
             t.func = _make_shell_func(original_func)
+            # Force LangGraph to route async (ainvoke) through the sync wrapper
+            t.coroutine = None
             wrapped.append(t)
 
         else:
