@@ -288,6 +288,186 @@ class TestEventBus:
         await event_bus.stop()
 
 
+class TestPatternSubscriptions:
+    """Tests for subscribe_pattern() — fnmatch-style glob routing."""
+
+    @pytest.fixture
+    def event_bus(self):
+        return EventBus()
+
+    @pytest.mark.asyncio
+    async def test_pattern_matches(self, event_bus):
+        """Pattern 'file.*' should match file.written and file.edited."""
+        received = []
+
+        async def handler(event):
+            received.append(event.event_type)
+
+        event_bus.subscribe_pattern("file.*", handler)
+        await event_bus.start()
+
+        await event_bus.publish(Event(event_type="file.written", source="test"))
+        await event_bus.publish(Event(event_type="file.edited", source="test"))
+        await event_bus.publish(Event(event_type="tool.called", source="test"))
+
+        await asyncio.sleep(0.2)
+        await event_bus.stop()
+
+        assert "file.written" in received
+        assert "file.edited" in received
+        assert "tool.called" not in received
+
+    @pytest.mark.asyncio
+    async def test_pattern_star_matches_all(self, event_bus):
+        """Pattern '*' should match all event types."""
+        received = []
+
+        async def handler(event):
+            received.append(event.event_type)
+
+        event_bus.subscribe_pattern("*", handler)
+        await event_bus.start()
+
+        await event_bus.publish(Event(event_type="any.event", source="test"))
+        await asyncio.sleep(0.1)
+        await event_bus.stop()
+
+        assert len(received) == 1
+
+    @pytest.mark.asyncio
+    async def test_pattern_unsubscribe(self, event_bus):
+        """Unsubscribing a pattern handler should stop delivery."""
+        received = []
+
+        async def handler(event):
+            received.append(event)
+
+        sub_id = event_bus.subscribe_pattern("test.*", handler)
+        await event_bus.start()
+
+        await event_bus.publish(Event(event_type="test.a", source="s"))
+        await asyncio.sleep(0.1)
+        assert len(received) == 1
+
+        event_bus.unsubscribe(sub_id)
+        await event_bus.publish(Event(event_type="test.b", source="s"))
+        await asyncio.sleep(0.1)
+        assert len(received) == 1
+
+        await event_bus.stop()
+
+
+class TestEmitSync:
+    """Tests for emit_sync() — fire-and-forget from sync contexts."""
+
+    @pytest.fixture
+    def event_bus(self):
+        return EventBus()
+
+    @pytest.mark.asyncio
+    async def test_emit_sync_basic(self, event_bus):
+        """emit_sync should enqueue an event that gets processed."""
+        received = []
+
+        async def handler(event):
+            received.append(event)
+
+        event_bus.subscribe(handler)
+        await event_bus.start()
+
+        event = Event(event_type="sync.test", source="test")
+        event_bus.emit_sync(event)
+
+        await asyncio.sleep(0.1)
+        await event_bus.stop()
+
+        assert len(received) == 1
+        assert received[0].event_type == "sync.test"
+
+    @pytest.mark.asyncio
+    async def test_emit_sync_updates_metrics(self, event_bus):
+        """emit_sync should increment events_received."""
+        event_bus.emit_sync(Event(event_type="metric.test", source="test"))
+        metrics = event_bus.get_metrics()
+        assert metrics["events_received"] == 1
+
+    def test_emit_sync_queue_full(self):
+        """emit_sync on a full queue should not raise."""
+        bus = EventBus(max_queue_size=1)
+        bus.emit_sync(Event(event_type="a", source="s"))
+        # Should not raise, just log warning
+        bus.emit_sync(Event(event_type="b", source="s"))
+
+
+class TestHealthReport:
+    """Tests for health_report() — MetaLoop-compatible status."""
+
+    @pytest.fixture
+    def event_bus(self):
+        return EventBus()
+
+    def test_health_report_structure(self, event_bus):
+        report = event_bus.health_report()
+        assert "subscription_count" in report
+        assert "pattern_subscription_count" in report
+        assert "dispatch_rate" in report
+        assert "dlq_size" in report
+        assert "queue_size" in report
+        assert "dedup_cache_size" in report
+
+    def test_health_report_counts_subscriptions(self, event_bus):
+        event_bus.subscribe(lambda e: None)
+        event_bus.subscribe(lambda e: None, event_types={"foo"})
+        report = event_bus.health_report()
+        assert report["subscription_count"] == 2
+
+    def test_health_report_counts_pattern_subs(self, event_bus):
+        event_bus.subscribe_pattern("file.*", lambda e: None)
+        event_bus.subscribe_pattern("tool.*", lambda e: None)
+        report = event_bus.health_report()
+        assert report["pattern_subscription_count"] == 2
+
+
+class TestDLQReplay:
+    """Tests for dead letter queue replay."""
+
+    @pytest.mark.asyncio
+    async def test_replay_from_dlq(self):
+        """Replaying a DLQ event should requeue it."""
+        # Use a short dedup window so it expires before replay
+        bus = EventBus(max_retries=1, retry_delay_seconds=0.01, dedup_window_seconds=1)
+
+        async def failing_handler(event):
+            raise ValueError("always fails")
+
+        bus.subscribe(failing_handler)
+        await bus.start()
+
+        event = Event(event_type="replay.test", source="test", dedup_window_seconds=1)
+        await bus.publish(event)
+        await asyncio.sleep(0.3)
+
+        # Should be in DLQ
+        dlq = bus.get_dlq()
+        assert len(dlq) == 1
+        event_id = dlq[0]["event"]["event_id"]
+
+        # Clear dedup cache so replay is accepted
+        bus._dedup_cache.clear()
+
+        replayed = await bus.replay_from_dlq(event_id)
+        assert replayed is True
+
+        await asyncio.sleep(0.2)
+        await bus.stop()
+
+    @pytest.mark.asyncio
+    async def test_replay_nonexistent(self):
+        bus = EventBus()
+        result = await bus.replay_from_dlq("nonexistent-id")
+        assert result is False
+
+
 class TestCreateEvent:
     """Tests for create_event helper."""
 
@@ -313,3 +493,31 @@ class TestCreateEvent:
         assert event.payload == {"status": 500}
         assert event.priority == EventPriority.HIGH
         assert event.metadata["custom_field"] == "value"
+
+
+class TestGetEventBus:
+    """Tests for get_event_bus() singleton getter."""
+
+    def setup_method(self):
+        """Reset singleton between tests."""
+        import ag3nt_agent.autonomous.event_bus as mod
+        mod._event_bus = None
+
+    def test_returns_event_bus_instance(self):
+        from ag3nt_agent.autonomous.event_bus import get_event_bus
+        bus = get_event_bus()
+        assert isinstance(bus, EventBus)
+
+    def test_returns_same_instance(self):
+        from ag3nt_agent.autonomous.event_bus import get_event_bus
+        bus1 = get_event_bus()
+        bus2 = get_event_bus()
+        assert bus1 is bus2
+
+    def test_reset_creates_new_instance(self):
+        from ag3nt_agent.autonomous.event_bus import get_event_bus
+        import ag3nt_agent.autonomous.event_bus as mod
+        bus1 = get_event_bus()
+        mod._event_bus = None
+        bus2 = get_event_bus()
+        assert bus1 is not bus2

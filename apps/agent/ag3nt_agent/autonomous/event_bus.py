@@ -583,3 +583,20 @@ def create_event(
         priority=priority,
         metadata=metadata
     )
+
+
+# ── Module-level singleton ──────────────────────────────────────────────
+_event_bus: EventBus | None = None
+
+
+def get_event_bus() -> EventBus:
+    """Return the shared EventBus singleton.
+
+    Creates the instance on first call.  Every caller that needs the
+    *shared* bus (bootstrap, emit helpers, loops) should use this
+    instead of ``EventBus()``.
+    """
+    global _event_bus
+    if _event_bus is None:
+        _event_bus = EventBus()
+    return _event_bus
