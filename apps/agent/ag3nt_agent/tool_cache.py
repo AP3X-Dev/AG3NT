@@ -110,6 +110,7 @@ class ToolResultCache:
         self.ttl_seconds = ttl_seconds
 
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._key_to_args: dict[str, tuple[str, dict[str, Any]]] = {}
         self._lock = threading.RLock()
         self._stats = CacheStats()
 
@@ -214,6 +215,7 @@ class ToolResultCache:
                 size_bytes=size,
             )
             self._cache[key] = entry
+            self._key_to_args[key] = (tool_name, dict(args))
             self._stats.total_size_bytes += size
             self._stats.entry_count = len(self._cache)
 
@@ -231,6 +233,7 @@ class ToolResultCache:
             if pattern is None:
                 count = len(self._cache)
                 self._cache.clear()
+                self._key_to_args.clear()
                 self._stats.total_size_bytes = 0
                 self._stats.entry_count = 0
                 self._stats.invalidations += count
@@ -241,6 +244,7 @@ class ToolResultCache:
             # For now, just clear all (can implement smarter matching later)
             count = len(self._cache)
             self._cache.clear()
+            self._key_to_args.clear()
             self._stats.total_size_bytes = 0
             self._stats.entry_count = 0
             self._stats.invalidations += count
@@ -250,6 +254,8 @@ class ToolResultCache:
         """Invalidate cache entries related to a file path.
 
         Call this when a file is modified to ensure stale data isn't served.
+        Only removes entries where the given path appears in the cached args,
+        rather than clearing the entire cache.
 
         Args:
             path: File path that was modified
@@ -257,9 +263,32 @@ class ToolResultCache:
         Returns:
             Number of entries invalidated.
         """
-        # For now, invalidate all entries - can be optimized later
-        # to track which entries depend on which paths
-        return self.invalidate()
+        if not path:
+            return 0
+
+        with self._lock:
+            keys_to_remove: list[str] = []
+            for key, (tool_name, args) in self._key_to_args.items():
+                # Check if the path appears in any argument value
+                for arg_value in args.values():
+                    if isinstance(arg_value, str) and (
+                        path in arg_value or arg_value in path
+                    ):
+                        keys_to_remove.append(key)
+                        break
+
+            for key in keys_to_remove:
+                self._remove_entry(key)
+                self._stats.invalidations += 1
+
+            self._stats.entry_count = len(self._cache)
+            if keys_to_remove:
+                logger.debug(
+                    "Invalidated %d cache entries for path: %s",
+                    len(keys_to_remove),
+                    path,
+                )
+            return len(keys_to_remove)
 
     def get_stats(self) -> CacheStats:
         """Get cache statistics."""
@@ -277,6 +306,7 @@ class ToolResultCache:
         """Remove an entry from the cache (must hold lock)."""
         if key in self._cache:
             entry = self._cache.pop(key)
+            self._key_to_args.pop(key, None)
             self._stats.total_size_bytes -= entry.size_bytes
 
     def _evict_if_needed(self, new_size: int) -> None:

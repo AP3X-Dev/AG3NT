@@ -1455,6 +1455,111 @@ result = git.create_pull_request(
 - Repository must be on GitHub"""
 
 
+def _wrap_tools_with_cache(all_tools: list) -> list:
+    """Wrap cacheable tools with result caching and add write-operation invalidation.
+
+    For read-only tools (read_file, glob_tool, grep_tool, etc.), wraps the tool
+    so results are cached on first call and returned from cache on subsequent
+    identical calls.
+
+    For write tools (write_file, edit_file), adds post-execution cache
+    invalidation for the affected path. For shell, invalidates the entire cache.
+
+    Args:
+        all_tools: List of LangChain tool objects.
+
+    Returns:
+        List of tools with caching wrappers applied where appropriate.
+    """
+    try:
+        from ag3nt_agent.tool_cache import get_tool_cache, ToolResultCache
+    except ImportError:
+        logger.debug("tool_cache not available, skipping cache wrappers")
+        return all_tools
+
+    cache = get_tool_cache()
+    cacheable_names = ToolResultCache.CACHEABLE_TOOLS
+    write_tools = {"write_file", "edit_file"}
+    shell_tools = {"shell", "shell_tool", "exec_command"}
+
+    wrapped: list = []
+    for t in all_tools:
+        tool_name = getattr(t, "name", None)
+        if not tool_name:
+            wrapped.append(t)
+            continue
+
+        if tool_name in cacheable_names:
+            # Wrap read-only tool with cache check/set
+            original_func = t.func
+
+            def _make_cached_func(orig, name):
+                """Create a closure that captures orig and name."""
+                from functools import wraps
+
+                @wraps(orig)
+                def cached_func(*args, **kwargs):
+                    hit, value = cache.get(name, kwargs)
+                    if hit:
+                        logger.debug("Cache hit for %s", name)
+                        return value
+                    result = orig(*args, **kwargs)
+                    cache.set(name, kwargs, result)
+                    return result
+
+                return cached_func
+
+            t.func = _make_cached_func(original_func, tool_name)
+            wrapped.append(t)
+
+        elif tool_name in write_tools:
+            # Wrap write tool with post-execution cache invalidation
+            original_func = t.func
+
+            def _make_write_func(orig, name):
+                from functools import wraps
+
+                @wraps(orig)
+                def write_func(*args, **kwargs):
+                    result = orig(*args, **kwargs)
+                    path = kwargs.get("path", "") or kwargs.get("file_path", "")
+                    if path:
+                        cache.invalidate_path(path)
+                    return result
+
+                return write_func
+
+            t.func = _make_write_func(original_func, tool_name)
+            wrapped.append(t)
+
+        elif tool_name in shell_tools:
+            # Wrap shell tool with full cache invalidation
+            original_func = t.func
+
+            def _make_shell_func(orig):
+                from functools import wraps
+
+                @wraps(orig)
+                def shell_func(*args, **kwargs):
+                    result = orig(*args, **kwargs)
+                    cache.invalidate()
+                    return result
+
+                return shell_func
+
+            t.func = _make_shell_func(original_func)
+            wrapped.append(t)
+
+        else:
+            wrapped.append(t)
+
+    cached_count = sum(1 for t in wrapped if getattr(t, "name", None) in cacheable_names)
+    if cached_count:
+        logger.info("Tool cache wrappers applied to %d cacheable tools", cached_count)
+
+    return wrapped
+
+
 def _build_agent() -> CompiledStateGraph:
     """Build and return the DeepAgents agent graph.
 
@@ -1593,6 +1698,9 @@ def _build_agent() -> CompiledStateGraph:
     if tool_policy is not None:
         all_tools = tool_policy.filter_tools(all_tools)
         logger.info(f"Tool policy applied: {len(all_tools)} tools available")
+
+    # Wrap cacheable tools with result caching and write-invalidation
+    all_tools = _wrap_tools_with_cache(all_tools)
 
     # System prompt — uses shared function for consistency with UI agent
     system_prompt = _get_system_prompt()
