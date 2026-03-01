@@ -1,5 +1,4 @@
 """Tests for bootstrap file budget manager."""
-import pytest
 from ag3nt_agent.bootstrap_budget import BootstrapBudgetManager, BudgetConfig
 
 
