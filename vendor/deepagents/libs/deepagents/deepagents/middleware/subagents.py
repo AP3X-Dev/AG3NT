@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import copy
 from collections import deque
+from pathlib import Path
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, NotRequired, TypedDict, cast
 
@@ -92,6 +93,21 @@ class SubagentMailbox:
     def empty(self) -> bool:
         """Check if the mailbox is empty."""
         return len(self._queue) == 0
+
+
+def _load_base_prompt() -> str:
+    """Load the base agent prompt from base_prompt.md."""
+    prompt_path = Path(__file__).parent.parent / "base_prompt.md"
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8").strip()
+    return "You are a helpful AI assistant."
+
+
+GENERAL_PURPOSE_SUBAGENT: dict[str, Any] = {
+    "name": "general-purpose",
+    "description": "A general-purpose agent that can handle a wide range of tasks autonomously.",
+    "system_prompt": _load_base_prompt(),
+}
 
 
 class SubAgent(TypedDict):
