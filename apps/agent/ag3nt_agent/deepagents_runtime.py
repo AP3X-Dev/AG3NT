@@ -1823,12 +1823,30 @@ def _build_agent() -> CompiledStateGraph:
     # Build middleware list
     # Note: create_deep_agent already adds TodoListMiddleware internally
     # so we only add AG3NT-specific middleware here to avoid duplicates
+    planning_middleware = PlanningMiddleware(yolo_mode=_is_yolo_mode())
+    skill_trigger_middleware = SkillTriggerMiddleware(planning_middleware=planning_middleware)
+
+    # Context budget tracker — inject report when usage is elevated
+    context_budget = None
+    try:
+        from ag3nt_agent.context_budget import ContextBudgetTracker, BudgetStatus
+
+        context_budget = ContextBudgetTracker()
+
+        def _budget_report_if_elevated() -> str:
+            """Return budget report only when status is YELLOW or RED."""
+            if context_budget.status() == BudgetStatus.GREEN:
+                return ""
+            return context_budget.budget_report()
+    except Exception:
+        logger.debug("ContextBudgetTracker not available", exc_info=True)
+
     turn_context_middleware = TurnContextMiddleware(
         identity_loader=IdentityLoader(),
         memory_search_fn=search_memory,
+        skills_metadata_fn=skill_trigger_middleware.get_skills_metadata,
+        context_budget_fn=_budget_report_if_elevated if context_budget else None,
     )
-    planning_middleware = PlanningMiddleware(yolo_mode=_is_yolo_mode())
-    skill_trigger_middleware = SkillTriggerMiddleware(planning_middleware=planning_middleware)
     agent_guard = AgentGuardMiddleware()
     middleware_list = [
         agent_guard,              # Doom loop + steps limit + output truncation
@@ -1839,6 +1857,16 @@ def _build_agent() -> CompiledStateGraph:
     ]
     if path_protection_middleware:
         middleware_list.append(path_protection_middleware)
+
+    # Skills hot-reload: invalidate trigger + metadata caches on SKILL.md changes
+    try:
+        from ag3nt_agent.skills_watcher import SkillsWatcher
+
+        skills_watcher = SkillsWatcher()
+        skills_watcher.on_change(skill_trigger_middleware.invalidate_triggers)
+        skills_watcher.start()
+    except Exception:
+        logger.debug("SkillsWatcher not available", exc_info=True)
 
     # Safety hooks middleware (wraps tool calls with PRE/POST hooks)
     safety_hook_middleware = None
@@ -2778,6 +2806,7 @@ async def start_autonomous_system(config: dict | None = None) -> dict:
         logger.info("Autonomous bootstrap: legacy AutonomousRuntime started")
     except Exception as exc:
         logger.warning("Autonomous bootstrap: legacy AutonomousRuntime unavailable: %s", exc)
+
 
     _autonomous_runtime = runtime
     logger.info(

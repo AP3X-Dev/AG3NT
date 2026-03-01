@@ -64,12 +64,16 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
         memory_search_fn: Callable | None = None,
         memory_char_budget: int = 2000,
         prompt_mode: PromptMode = PromptMode.FULL,
+        skills_metadata_fn: Callable[[], dict[str, dict]] | None = None,
+        context_budget_fn: Callable[[], str] | None = None,
     ) -> None:
         self.tools = []  # Required by AgentMiddleware
         self._identity = identity_loader or IdentityLoader()
         self._memory_search = memory_search_fn
         self._memory_budget = memory_char_budget
         self.prompt_mode = prompt_mode
+        self._skills_metadata_fn = skills_metadata_fn
+        self._context_budget_fn = context_budget_fn
 
     def wrap_model_call(
         self,
@@ -132,7 +136,25 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
         # 4. Environment block
         parts.append(self._environment_block())
 
-        # 5. Summary guardrail
+        # 5. Skills manifest (compact list of available skills)
+        if self._skills_metadata_fn:
+            try:
+                manifest = self._build_skills_manifest(self._skills_metadata_fn())
+                if manifest:
+                    parts.append(manifest)
+            except Exception:
+                logger.debug("Skills manifest loading failed", exc_info=True)
+
+        # 6. Context budget report (only when usage is elevated)
+        if self._context_budget_fn:
+            try:
+                report = self._context_budget_fn()
+                if report:
+                    parts.append(f"## Context Budget\n{report}")
+            except Exception:
+                logger.debug("Context budget report failed", exc_info=True)
+
+        # 7. Summary guardrail
         parts.append(
             "## Context Handling\n"
             "If a conversation summary appears in the message history, "

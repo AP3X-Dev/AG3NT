@@ -4,8 +4,8 @@ Monitors accumulated token usage across system prompt, messages, and tool result
 Provides status levels (green/yellow/red) and suggested output limits to prevent
 context overflow before it happens.
 
-TODO: Wire into deepagents_runtime.py to track token usage per turn and inject
-budget_report() into system prompt when status is YELLOW or RED.
+Wired into the system via TurnContextMiddleware: when status is YELLOW or RED,
+the budget report is injected into the system prompt automatically.
 """
 from __future__ import annotations
 

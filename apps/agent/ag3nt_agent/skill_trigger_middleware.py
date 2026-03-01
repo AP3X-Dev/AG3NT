@@ -43,48 +43,87 @@ def find_repo_root() -> Path:
     return Path.cwd()
 
 
-def load_skill_triggers() -> dict[str, list[str]]:
-    """Load triggers from all skills.
-    
-    Returns:
-        Dictionary mapping skill names to their trigger phrases
-    """
+def _scan_skill_dirs() -> list[Path]:
+    """Return skill directories in priority order (bundled, global, workspace)."""
     repo_root = find_repo_root()
-    skill_dirs = [
+    return [
         repo_root / "skills",  # Bundled
         Path.home() / ".ag3nt" / "skills",  # Global
         repo_root / ".ag3nt" / "skills",  # Workspace
     ]
-    
+
+
+def load_skill_triggers() -> dict[str, list[str]]:
+    """Load triggers from all skills.
+
+    Returns:
+        Dictionary mapping skill names to their trigger phrases
+    """
     triggers_map: dict[str, list[str]] = {}
-    
-    for skill_dir in skill_dirs:
+
+    for skill_dir in _scan_skill_dirs():
         if not skill_dir.exists():
             continue
-        
+
         for skill_path in skill_dir.iterdir():
             if not skill_path.is_dir():
                 continue
-            
+
             skill_md = skill_path / "SKILL.md"
             if not skill_md.exists():
                 continue
-            
+
             try:
                 content = skill_md.read_text(encoding="utf-8")
                 frontmatter = parse_skill_frontmatter(content)
-                
+
                 if frontmatter and "triggers" in frontmatter:
                     skill_name = frontmatter.get("name", skill_path.name)
                     triggers = frontmatter["triggers"]
-                    
+
                     if isinstance(triggers, list):
                         # Later sources override earlier ones
                         triggers_map[skill_name] = triggers
             except Exception as e:
                 logger.warning(f"Failed to load triggers from {skill_md}: {e}")
-    
+
     return triggers_map
+
+
+def load_skills_metadata() -> dict[str, dict[str, Any]]:
+    """Load name and description metadata from all skills.
+
+    Returns:
+        Dictionary mapping skill name to ``{"name": ..., "description": ...}``.
+        Later sources (global, workspace) override earlier ones (bundled).
+    """
+    metadata: dict[str, dict[str, Any]] = {}
+
+    for skill_dir in _scan_skill_dirs():
+        if not skill_dir.exists():
+            continue
+
+        for skill_path in skill_dir.iterdir():
+            if not skill_path.is_dir():
+                continue
+
+            skill_md = skill_path / "SKILL.md"
+            if not skill_md.exists():
+                continue
+
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                frontmatter = parse_skill_frontmatter(content)
+                if frontmatter:
+                    skill_name = frontmatter.get("name", skill_path.name)
+                    metadata[skill_name] = {
+                        "name": skill_name,
+                        "description": frontmatter.get("description", ""),
+                    }
+            except Exception as e:
+                logger.warning(f"Failed to load metadata from {skill_md}: {e}")
+
+    return metadata
 
 
 def match_triggers(user_message: str, triggers_map: dict[str, list[str]]) -> list[str]:
@@ -138,6 +177,7 @@ class SkillTriggerMiddleware(AgentMiddleware):
     def __init__(self, planning_middleware=None):
         super().__init__()
         self._triggers_map: dict[str, list[str]] | None = None
+        self._metadata_cache: dict[str, dict[str, Any]] | None = None
         self._planning_middleware = planning_middleware
         self._triggers_lock = threading.Lock()
 
@@ -152,6 +192,13 @@ class SkillTriggerMiddleware(AgentMiddleware):
     def invalidate_triggers(self) -> None:
         """Invalidate cached triggers, forcing reload on next access."""
         self._triggers_map = None
+        self._metadata_cache = None
+
+    def get_skills_metadata(self) -> dict[str, dict[str, Any]]:
+        """Return cached skills metadata (name + description per skill)."""
+        if getattr(self, "_metadata_cache", None) is None:
+            self._metadata_cache = load_skills_metadata()
+        return self._metadata_cache
     
     def wrap_model_call(
         self,
