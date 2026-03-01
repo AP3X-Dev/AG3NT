@@ -321,6 +321,87 @@ describe('Scheduler', () => {
       expect(jobs[0].channelTarget).toBe('telegram:bot-1:chat-123');
     });
   });
+
+  describe('Cron Exponential Backoff', () => {
+    it('should apply backoff after job failure', async () => {
+      const failHandler: ScheduledMessageHandler = vi.fn()
+        .mockRejectedValueOnce(new Error('task failed'))
+        .mockResolvedValue({ text: 'ok', notify: false });
+
+      const backoffScheduler = new Scheduler(config, failHandler, mockNotifier);
+      const jobId = backoffScheduler.addJob({
+        schedule: '*/5 * * * *',
+        message: 'test',
+      });
+
+      await backoffScheduler['runCronJob'](jobId);
+
+      // Job should still exist and have backoffUntil set
+      const entry = backoffScheduler['jobs'].get(jobId);
+      expect(entry?.job.backoffUntil).toBeDefined();
+      expect(backoffScheduler['consecutiveErrors'].get(jobId)).toBe(1);
+
+      backoffScheduler.stop();
+    });
+
+    it('should reset backoff on success after failure', async () => {
+      let callCount = 0;
+      const handler: ScheduledMessageHandler = vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) throw new Error('fail');
+        return Promise.resolve({ text: 'ok', notify: false });
+      });
+
+      const s = new Scheduler(config, handler, mockNotifier);
+      const jobId = s.addJob({ schedule: '*/5 * * * *', message: 'test' });
+
+      await s['runCronJob'](jobId);
+      expect(s['consecutiveErrors'].get(jobId)).toBe(1);
+      const entry1 = s['jobs'].get(jobId);
+      expect(entry1?.job.backoffUntil).toBeDefined();
+
+      // Advance past the backoff window (30s) so the next call is not skipped
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await s['runCronJob'](jobId);
+      expect(s['consecutiveErrors'].get(jobId)).toBe(0);
+      const entry2 = s['jobs'].get(jobId);
+      expect(entry2?.job.backoffUntil).toBeUndefined();
+
+      s.stop();
+    });
+
+    it('should skip execution during backoff window', async () => {
+      const failHandler: ScheduledMessageHandler = vi.fn()
+        .mockRejectedValue(new Error('fail'));
+
+      const mockStore = {
+        save: vi.fn(),
+        recordRun: vi.fn(),
+        loadAll: vi.fn().mockReturnValue([]),
+        getRunHistory: vi.fn().mockReturnValue([]),
+      };
+
+      const s = new Scheduler(config, failHandler, mockNotifier, undefined, mockStore as any);
+      const jobId = s.addJob({ schedule: '*/5 * * * *', message: 'test' });
+
+      // First failure — sets backoff
+      await s['runCronJob'](jobId);
+      expect(failHandler).toHaveBeenCalledTimes(1);
+
+      // Second call within backoff window — should skip
+      await s['runCronJob'](jobId);
+      // Handler should NOT have been called again (still only 1 call)
+      expect(failHandler).toHaveBeenCalledTimes(1);
+      // Should record a 'skipped' run
+      expect(mockStore.recordRun).toHaveBeenCalledWith(
+        jobId,
+        expect.objectContaining({ status: 'skipped' }),
+      );
+
+      s.stop();
+    });
+  });
 });
 
 

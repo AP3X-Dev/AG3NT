@@ -41,6 +41,8 @@ export interface CronJob extends CronJobDefinition {
   paused: boolean;
   /** When the job was created */
   createdAt: Date;
+  /** Skip execution until this time (exponential backoff after failures) */
+  backoffUntil?: Date;
 }
 
 /**

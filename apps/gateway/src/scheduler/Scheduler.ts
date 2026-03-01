@@ -374,6 +374,17 @@ export class Scheduler {
     const entry = this.jobs.get(jobId);
     if (!entry || entry.job.paused) return;
 
+    // Skip if within backoff window
+    if (entry.job.backoffUntil && new Date() < entry.job.backoffUntil) {
+      console.log(`[Scheduler] Job ${jobId} in backoff until ${entry.job.backoffUntil.toISOString()}, skipping`);
+      this.store?.recordRun(jobId, {
+        status: 'skipped',
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+      });
+      return;
+    }
+
     const { job } = entry;
     const now = new Date();
     const startTime = Date.now();
@@ -396,6 +407,7 @@ export class Scheduler {
       // Record successful run
       const durationMs = Date.now() - startTime;
       this.consecutiveErrors.set(jobId, 0);
+      entry.job.backoffUntil = undefined;
       this.store?.recordRun(jobId, {
         status: 'ok',
         startedAt: now.toISOString(),
@@ -443,6 +455,7 @@ export class Scheduler {
       // Determine backoff tier
       const backoffIndex = Math.min(errorCount - 1, ERROR_BACKOFF_MS.length - 1);
       const backoffMs = ERROR_BACKOFF_MS[backoffIndex];
+      entry.job.backoffUntil = new Date(Date.now() + backoffMs);
 
       console.warn(
         `[Scheduler] Cron job ${jobId} error (consecutive: ${errorCount}, ` +
