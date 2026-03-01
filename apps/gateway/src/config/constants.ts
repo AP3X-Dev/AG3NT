@@ -8,8 +8,8 @@ import { Agent as HttpAgent } from "node:http";
 export const WORKER_URL =
   process.env.AG3NT_AGENT_URL || "http://127.0.0.1:18790";
 
-/** Default fetch timeout for worker calls (30 seconds). */
-export const WORKER_FETCH_TIMEOUT_MS = 30_000;
+/** Default fetch timeout for worker calls (10 minutes — supports long-running tasks). */
+export const WORKER_FETCH_TIMEOUT_MS = parseInt(process.env.AG3NT_WORKER_TIMEOUT_MS || "600000", 10);
 
 /** TTL for pending approvals before auto-expiry (10 minutes). */
 export const PENDING_APPROVAL_TTL_MS = 10 * 60 * 1000;
@@ -41,3 +41,18 @@ export const WORKER_HTTP_AGENT = new HttpAgent({
   maxFreeSockets: 5,         // Keep up to 5 idle connections ready
   timeout: WORKER_FETCH_TIMEOUT_MS,
 });
+
+// =============================================================================
+// Heartbeat Runner Defaults
+// =============================================================================
+
+/** Default configuration for the HeartbeatRunner (reads HEARTBEAT.md). */
+export const HEARTBEAT_DEFAULTS = {
+  intervalMs: 30 * 60 * 1000, // 30 minutes
+  activeHours: {
+    start: '08:00',
+    end: '22:00',
+    timezone: 'UTC',
+  },
+  ackMaxChars: 300,
+};

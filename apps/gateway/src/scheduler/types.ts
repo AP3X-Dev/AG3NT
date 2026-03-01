@@ -58,6 +58,12 @@ export interface SchedulerConfig {
   heartbeat: HeartbeatConfig;
   /** Initial cron jobs from config */
   cronJobs: CronJobDefinition[];
+  /**
+   * Optional workspace path for HeartbeatRunner.
+   * When provided, the Scheduler delegates heartbeat to HeartbeatRunner
+   * which reads HEARTBEAT.md and supports active-hours filtering.
+   */
+  workspacePath?: string;
 }
 
 /**

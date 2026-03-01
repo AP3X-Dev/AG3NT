@@ -61,6 +61,7 @@ import { createHealthRoutes } from "../routes/health.js";
 import { createNotificationsRouter, emitScheduledMessage } from "../routes/notifications.js";
 import { validateWorkspacePath } from "../utils/pathSecurity.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
+import { HEARTBEAT_DEFAULTS } from "../config/constants.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -312,11 +313,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Initialize scheduler
+  const userDataPath = path.join(os.homedir(), ".ag3nt");
   const schedulerConfig: SchedulerConfig = {
     heartbeat: {
       intervalMinutes: config.scheduler.heartbeatMinutes,
     },
     cronJobs: config.scheduler.cron as CronJobDefinition[],
+    workspacePath: path.join(userDataPath, "workspace"),
   };
 
   // Create persistent cron job store

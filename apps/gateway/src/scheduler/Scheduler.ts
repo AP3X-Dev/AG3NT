@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import { ERROR_BACKOFF_MS } from "./types.js";
 import type { CronJobStore } from "./CronJobStore.js";
+import { HeartbeatRunner } from "./HeartbeatRunner.js";
 
 /**
  * Parse relative time string (e.g., "in 10 minutes") to a Date.
@@ -55,6 +56,7 @@ export class Scheduler {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private heartbeatPaused = false;
   private lastHeartbeat: Date | null = null;
+  private heartbeatRunner?: HeartbeatRunner;
 
   // Cron jobs
   private jobs = new Map<string, { job: CronJob; scheduled: schedule.Job }>();
@@ -103,7 +105,13 @@ export class Scheduler {
    * Stop all scheduled tasks.
    */
   stop(): void {
-    // Stop heartbeat
+    // Stop HeartbeatRunner if active
+    if (this.heartbeatRunner) {
+      this.heartbeatRunner.stop();
+      this.heartbeatRunner = undefined;
+    }
+
+    // Stop heartbeat interval (sentinel or legacy)
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
@@ -125,6 +133,41 @@ export class Scheduler {
   private startHeartbeat(): void {
     const intervalMs = this.config.heartbeat.intervalMinutes * 60 * 1000;
 
+    // If workspacePath is configured, delegate to HeartbeatRunner
+    // which reads HEARTBEAT.md and supports active-hours filtering.
+    if (this.config.workspacePath) {
+      this.heartbeatRunner = new HeartbeatRunner({
+        intervalMs,
+        workspacePath: this.config.workspacePath,
+        agentHandler: async (prompt, sessionId) => {
+          const result = await this.messageHandler(prompt, sessionId, {
+            type: "heartbeat",
+            timestamp: new Date().toISOString(),
+          });
+          // Update Scheduler-level tracking
+          this.lastHeartbeat = new Date();
+          this.emitEvent({
+            type: "heartbeat",
+            message: prompt.slice(0, 100),
+            timestamp: this.lastHeartbeat,
+            response: result.text,
+          });
+          return { content: result.text };
+        },
+        notifier: async (message) => {
+          await this.notifier(undefined, message);
+        },
+      });
+      this.heartbeatRunner.start();
+      // Set a sentinel so isHeartbeatRunning / getStatus still work
+      this.heartbeatInterval = setInterval(() => {}, 2_147_483_647) as ReturnType<typeof setInterval>;
+      console.log(
+        `[Scheduler] HeartbeatRunner started (every ${this.config.heartbeat.intervalMinutes} minutes, workspace: ${this.config.workspacePath})`
+      );
+      return;
+    }
+
+    // Fallback: basic interval-based heartbeat (no HEARTBEAT.md support)
     this.heartbeatInterval = setInterval(() => {
       if (!this.heartbeatPaused) {
         this.runHeartbeat();
@@ -175,11 +218,17 @@ export class Scheduler {
 
   pauseHeartbeat(): void {
     this.heartbeatPaused = true;
+    if (this.heartbeatRunner) {
+      this.heartbeatRunner.stop();
+    }
     console.log("[Scheduler] Heartbeat paused");
   }
 
   resumeHeartbeat(): void {
     this.heartbeatPaused = false;
+    if (this.heartbeatRunner) {
+      this.heartbeatRunner.start();
+    }
     console.log("[Scheduler] Heartbeat resumed");
   }
 
@@ -188,6 +237,10 @@ export class Scheduler {
   }
 
   getLastHeartbeat(): Date | null {
+    // HeartbeatRunner tracks its own lastRun; prefer it when available
+    if (this.heartbeatRunner) {
+      return this.heartbeatRunner.getLastRun() ?? this.lastHeartbeat;
+    }
     return this.lastHeartbeat;
   }
 
@@ -534,7 +587,7 @@ export class Scheduler {
     return {
       heartbeatRunning: this.heartbeatInterval !== null,
       heartbeatPaused: this.heartbeatPaused,
-      lastHeartbeat: this.lastHeartbeat,
+      lastHeartbeat: this.getLastHeartbeat(),
       jobCount: this.jobs.size,
       jobs: this.listJobs(),
     };
