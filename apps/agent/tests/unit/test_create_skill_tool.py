@@ -1,6 +1,30 @@
 """Tests for the self-building skills tool."""
+from __future__ import annotations
+
+import sys
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
+
+
+def _ensure_mock_module(name: str) -> ModuleType:
+    if name in sys.modules:
+        return sys.modules[name]
+    mod = ModuleType(name)
+    sys.modules[name] = mod
+    return mod
+
+
+# Ensure langchain_core.tools is available (may be mocked as ModuleType by other tests)
+_lc_core = _ensure_mock_module("langchain_core")
+_lc_core_tools = _ensure_mock_module("langchain_core.tools")
+if not hasattr(_lc_core_tools, "tool"):
+
+    def _mock_tool_decorator(fn):
+        fn.invoke = lambda args: fn(**args)
+        return fn
+
+    _lc_core_tools.tool = _mock_tool_decorator
 
 from ag3nt_agent.create_skill_tool import create_skill, _build_skill_content
 
