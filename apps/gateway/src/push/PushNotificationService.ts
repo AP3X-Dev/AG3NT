@@ -91,7 +91,7 @@ export class PushNotificationService {
   }
 
   listNodes(): string[] {
-    return this.tokens.map(t => t.nodeId);
+    return [...new Set(this.tokens.map(t => t.nodeId))];
   }
 
   buildAlertPayload(opts: AlertPayloadOptions): ApnsAlertPayload {

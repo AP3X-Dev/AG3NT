@@ -99,6 +99,22 @@ describe("Push Routes", () => {
       const res = await request(app).post("/push/register").send({});
       expect(res.status).toBe(400);
     });
+
+    it("should reject oversized nodeId", async () => {
+      const res = await request(app)
+        .post("/push/register")
+        .send({ nodeId: "x".repeat(257), token: "abc", topic: "com.app" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Invalid nodeId");
+    });
+
+    it("should reject oversized token", async () => {
+      const res = await request(app)
+        .post("/push/register")
+        .send({ nodeId: "n1", token: "x".repeat(513), topic: "com.app" });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Invalid token");
+    });
   });
 
   describe("DELETE /push/register/:nodeId", () => {
@@ -169,6 +185,54 @@ describe("Push Routes", () => {
       expect(node.nodeId).toBe("n1");
       expect(node.tokens).toHaveLength(1);
       expect(node.tokens[0].token).toBe("tok-a");
+    });
+  });
+
+  describe("POST /push/test", () => {
+    it("should return test payload for registered node", async () => {
+      service.registerToken({
+        nodeId: "n1",
+        token: "device-tok",
+        topic: "com.app",
+        environment: "sandbox",
+      });
+      const res = await request(app)
+        .post("/push/test")
+        .send({ nodeId: "n1" });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.payload.aps.alert.title).toBe("Test Notification");
+      expect(res.body.payload.aps.alert.body).toBe("This is a test push from AG3NT");
+      expect(res.body.token).toBe("device-tok");
+    });
+
+    it("should accept custom title and body", async () => {
+      service.registerToken({
+        nodeId: "n1",
+        token: "tok",
+        topic: "com.app",
+        environment: "sandbox",
+      });
+      const res = await request(app)
+        .post("/push/test")
+        .send({ nodeId: "n1", title: "Hello", body: "World" });
+      expect(res.status).toBe(200);
+      expect(res.body.payload.aps.alert.title).toBe("Hello");
+      expect(res.body.payload.aps.alert.body).toBe("World");
+    });
+
+    it("should reject missing nodeId", async () => {
+      const res = await request(app).post("/push/test").send({});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("Missing nodeId");
+    });
+
+    it("should return 404 for unregistered node", async () => {
+      const res = await request(app)
+        .post("/push/test")
+        .send({ nodeId: "unknown" });
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain("No tokens");
     });
   });
 });
