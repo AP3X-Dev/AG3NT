@@ -362,7 +362,10 @@ export class Scheduler {
         this.runCronJob(jobId);
       });
     } else {
-      newScheduled = schedule.scheduleJob(entry.job.schedule, () => {
+      const resumeSpec = entry.job.timezone
+        ? { rule: entry.job.schedule, tz: entry.job.timezone }
+        : entry.job.schedule;
+      newScheduled = schedule.scheduleJob(resumeSpec, () => {
         this.runCronJob(jobId);
       });
     }
@@ -555,7 +558,10 @@ export class Scheduler {
       if (pj.enabled) {
         const scheduledJob = relativeTime
           ? schedule.scheduleJob(relativeTime, () => this.runCronJob(pj.id))
-          : schedule.scheduleJob(pj.schedule, () => this.runCronJob(pj.id));
+          : schedule.scheduleJob(
+              pj.timezone ? { rule: pj.schedule, tz: pj.timezone } : pj.schedule,
+              () => this.runCronJob(pj.id)
+            );
 
         const cronJob: CronJob = {
           schedule: pj.schedule,
@@ -564,6 +570,7 @@ export class Scheduler {
           channelTarget: pj.channelTarget,
           oneShot: pj.oneShot,
           name: pj.name,
+          timezone: pj.timezone,
           id: pj.id,
           nextRun: scheduledJob.nextInvocation() ?? null,
           paused: false,
@@ -575,7 +582,10 @@ export class Scheduler {
         // Paused job: schedule but immediately cancel so the job entry exists in the map
         const pausedJob = relativeTime
           ? schedule.scheduleJob(new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), () => {})
-          : schedule.scheduleJob(pj.schedule, () => this.runCronJob(pj.id));
+          : schedule.scheduleJob(
+              pj.timezone ? { rule: pj.schedule, tz: pj.timezone } : pj.schedule,
+              () => this.runCronJob(pj.id)
+            );
         pausedJob.cancel();
 
         const cronJob: CronJob = {
@@ -585,6 +595,7 @@ export class Scheduler {
           channelTarget: pj.channelTarget,
           oneShot: pj.oneShot,
           name: pj.name,
+          timezone: pj.timezone,
           id: pj.id,
           nextRun: null,
           paused: true,
