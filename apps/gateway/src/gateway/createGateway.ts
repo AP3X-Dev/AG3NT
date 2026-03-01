@@ -36,6 +36,8 @@ import { ChannelDeliveryService } from "../channels/ChannelDeliveryService.js";
 import { Scheduler, type SchedulerConfig, type CronJobDefinition } from "../scheduler/index.js";
 import { CronJobStore } from "../scheduler/CronJobStore.js";
 import { SessionRecovery } from "../scheduler/SessionRecovery.js";
+import { PushNotificationService } from "../push/PushNotificationService.js";
+import { createPushRouter } from "../routes/push.js";
 import { NodeRegistry, NodeConnectionManager, PairingManager } from "../nodes/index.js";
 import { SkillsManager } from "../skills/index.js";
 import { gatewayLogs } from "../logs/index.js";
@@ -339,6 +341,16 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Create session recovery for gateway state persistence
   const sessionRecovery = new SessionRecovery(userDataPath);
 
+  // Create push notification service
+  const pushService = new PushNotificationService(
+    path.join(os.homedir(), '.ag3nt', 'push'),
+    {
+      teamId: process.env.APNS_TEAM_ID ?? '',
+      keyId: process.env.APNS_KEY_ID ?? '',
+      privateKey: process.env.APNS_PRIVATE_KEY ?? '',
+    },
+  );
+
   const scheduler = new Scheduler(
     schedulerConfig,
     // Message handler: sends scheduled messages to the agent via router
@@ -605,6 +617,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
   const { createStateRouter } = await import("../routes/state.js");
   const stateRouter = createStateRouter();
   app.use("/api/state", stateRouter);
+
+  // Mount push notification token management routes
+  app.use(`${config.gateway.httpPath}/push`, createPushRouter(pushService));
 
   // Mount plugin-registered HTTP routes
   if (pluginRegistry) {
