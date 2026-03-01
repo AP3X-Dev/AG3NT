@@ -3,13 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   Activity,
+  Brain,
+  Clock,
   FileText,
   FolderOpen,
+  Hash,
+  Key,
   Laptop,
+  Radio,
   RefreshCw,
+  Server,
   ShieldCheck,
   Signal,
   Terminal,
+  Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -17,8 +24,20 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { ModuleContainer, EmptyModuleState, ErrorModuleState, LoadingModuleState } from "./module-container"
 import { useAgentConnection } from "@/hooks/use-agent-connection"
+import { useChat } from "@/providers/chat-provider"
+import { AVAILABLE_MODELS } from "@/components/features/chat/model-selector"
 import type { ModuleConfig, ModuleInstanceProps } from "@/types/modules"
 
 type ViewId =
@@ -48,6 +67,34 @@ export const ag3ntControlPanelModuleConfig: ModuleConfig = {
   },
 }
 
+function ControlPanelSection({
+  icon: Icon,
+  label,
+  iconColor = "text-text-muted",
+  children,
+  action,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  iconColor?: string
+  children: React.ReactNode
+  action?: React.ReactNode
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 py-2.5">
+        <Icon className={cn("w-3.5 h-3.5", iconColor)} />
+        <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">
+          {label}
+        </span>
+        <div className="flex-1 border-b border-border/30 ml-2" />
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      <div className="mt-1">{children}</div>
+    </div>
+  )
+}
+
 const VIEWS: Array<{ id: ViewId; label: string; icon: any }> = [
   { id: "dashboard", label: "Dashboard", icon: Activity },
   { id: "nodes", label: "Nodes", icon: Laptop },
@@ -58,6 +105,13 @@ const VIEWS: Array<{ id: ViewId; label: string; icon: any }> = [
 ]
 
 const DEFAULT_GATEWAY_URL = process.env.NEXT_PUBLIC_AG3NT_GATEWAY_URL || "http://127.0.0.1:18789"
+
+const LOG_LEVEL_COLORS: Record<string, { stripe: string; badge: string }> = {
+  debug: { stripe: "bg-zinc-500", badge: "text-text-muted" },
+  info: { stripe: "bg-emerald-400", badge: "text-emerald-400" },
+  warn: { stripe: "bg-amber-400", badge: "text-amber-400" },
+  error: { stripe: "bg-red-400", badge: "text-red-400" },
+}
 
 function toWsUrl(httpUrl: string): string {
   return httpUrl.replace(/^http/i, "ws").replace(/\/+$/, "") + "/ws?debug=true"
@@ -98,6 +152,8 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
     autoRegister: agentEnabled,
     initialContext: { view, state: { isLoading: true, error: null } },
   })
+
+  const { setSelectedModel: setChatModel } = useChat()
 
   // ---------------------------------------------------------------------------
   // Shared helpers
@@ -169,6 +225,17 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
   const [memorySelected, setMemorySelected] = useState<string | null>(null)
   const [memoryContent, setMemoryContent] = useState<string>("")
   const [memorySaving, setMemorySaving] = useState(false)
+
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean
+    title: string
+    description: string
+    onConfirm: () => void
+  }>({ open: false, title: "", description: "", onConfirm: () => {} })
+
+  const showConfirm = useCallback((title: string, description: string, onConfirm: () => void) => {
+    setConfirmDialog({ open: true, title, description, onConfirm })
+  }, [])
 
   const load = useCallback(async (v: ViewId) => {
     if (agentEnabled) {
@@ -315,10 +382,6 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
   }, [])
 
   const restartAgentWorker = useCallback(async () => {
-    if (typeof window !== "undefined") {
-      const ok = window.confirm("Restart the agent worker? This may open a new terminal window.")
-      if (!ok) return
-    }
     setActionMessage(null)
     try {
       await fetchGatewayJson<any>("agent/restart", { method: "POST" })
@@ -350,13 +413,20 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
         body: JSON.stringify({ provider: modelProvider, model: modelName }),
       })
       setActionMessage(`Model saved: ${modelProvider}/${modelName}`)
+
+      // Sync to chat bar if the saved model exists in AVAILABLE_MODELS
+      const chatModelExists = AVAILABLE_MODELS.some((m) => m.id === modelName)
+      if (chatModelExists) {
+        setChatModel(modelName)
+      }
+
       await refreshCurrent()
     } catch (e: any) {
       setActionMessage(e?.message ? `Model save failed: ${e.message}` : "Model save failed")
     } finally {
       setModelSaving(false)
     }
-  }, [modelName, modelProvider, refreshCurrent])
+  }, [modelName, modelProvider, refreshCurrent, setChatModel])
 
   const generatePairingCode = useCallback(async () => {
     await fetchGatewayJson<any>("nodes/pairing/generate", { method: "POST" })
@@ -414,10 +484,6 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
 
   const deleteSession = useCallback(
     async (sessionId: string) => {
-      if (typeof window !== "undefined") {
-        const ok = window.confirm(`Delete session "${sessionId}"?`)
-        if (!ok) return
-      }
       setActionMessage(null)
       try {
         await fetchGatewayJson<any>(`sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" })
@@ -431,10 +497,6 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
   )
 
   const clearAllSessions = useCallback(async () => {
-    if (typeof window !== "undefined") {
-      const ok = window.confirm("Clear all sessions? This cannot be undone.")
-      if (!ok) return
-    }
     setActionMessage(null)
     try {
       const res = await fetchGatewayJson<any>("sessions/clear", { method: "POST" })
@@ -451,39 +513,51 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
   // ---------------------------------------------------------------------------
 
   const viewTabs = (
-    <div className="flex items-center gap-1 p-2 border-b border-border bg-surface-elevated">
-      <div className="flex items-center gap-1 flex-wrap">
+    <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface">
+      <div className="flex items-center gap-0.5 rounded-lg bg-surface-elevated p-1">
         {VIEWS.map((v) => {
           const Icon = v.icon
           const active = v.id === view
           return (
-            <Button
+            <button
               key={v.id}
-              variant={active ? "default" : "ghost"}
-              size="sm"
-              className={cn("gap-2", !active && "text-text-muted")}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150",
+                active
+                  ? "bg-surface text-text-primary shadow-sm"
+                  : "text-text-muted hover:text-text-secondary"
+              )}
               onClick={() => setViewSafe(v.id)}
               title={v.label}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-3.5 w-3.5" />
               {v.label}
-            </Button>
+            </button>
           )
         })}
       </div>
       <div className="ml-auto flex items-center gap-2">
         {view === "dashboard" && (
           <>
-            <Button variant="outline" size="sm" onClick={launchTui} title="Launch TUI">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={launchTui}>
               Launch TUI
             </Button>
-            <Button variant="outline" size="sm" onClick={restartAgentWorker} title="Restart agent worker">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => showConfirm(
+                "Restart Agent Worker",
+                "This may open a new terminal window. Are you sure you want to restart?",
+                restartAgentWorker
+              )}
+            >
               Restart Agent
             </Button>
           </>
         )}
-        <Button variant="ghost" size="sm" onClick={refreshCurrent} title="Refresh">
-          <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={refreshCurrent} title="Refresh">
+          <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
         </Button>
       </div>
     </div>
@@ -504,40 +578,61 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
       ? String(models.find((m: any) => String(m?.id) === modelName)?.name || modelName)
       : ""
     const agentStatus = String(agentWorker?.status || "")
-    return (
-      <div className="p-4 space-y-4">
-        {actionMessage && <div className="text-sm text-text-muted">{actionMessage}</div>}
-        <div className="flex items-center gap-3">
-          <Badge variant="outline" className="gap-2">
-            <Signal className="h-3 w-3" />
-            {health.ok ? "Gateway OK" : "Gateway Unknown"}
-          </Badge>
-          <span className="text-sm text-text-muted">{String(health.name || "ag3nt-gateway")}</span>
-        </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="p-3 rounded-lg border border-border bg-surface-elevated">
-            <div className="text-xs text-text-muted">Sessions</div>
-            <div className="text-lg font-semibold text-text-primary">{String(status.sessions ?? health.sessions ?? 0)}</div>
+    return (
+      <div className="p-4 space-y-5 overflow-y-auto">
+        {actionMessage && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-elevated border border-border text-sm text-text-secondary">
+            <Zap className="h-3.5 w-3.5 text-status-info shrink-0" />
+            {actionMessage}
           </div>
-          <div className="p-3 rounded-lg border border-border bg-surface-elevated">
-            <div className="text-xs text-text-muted">Scheduler Jobs</div>
-            <div className="text-lg font-semibold text-text-primary">
-              {String(status.scheduler?.jobCount ?? health.scheduler?.jobCount ?? 0)}
+        )}
+
+        <ControlPanelSection icon={Signal} label="Gateway Status" iconColor="text-status-success">
+          <div className="flex items-center gap-3">
+            <Badge variant="outline" className={cn("gap-2", health.ok ? "text-status-success border-status-success/30" : "text-text-muted")}>
+              <span className={cn("w-1.5 h-1.5 rounded-full", health.ok ? "bg-status-success" : "bg-zinc-500")} />
+              {health.ok ? "Online" : "Unknown"}
+            </Badge>
+            <span className="text-xs text-text-muted">{String(health.name || "ag3nt-gateway")}</span>
+          </div>
+        </ControlPanelSection>
+
+        <ControlPanelSection icon={Hash} label="Overview" iconColor="text-status-info">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex items-center gap-3 p-3 rounded-xl border border-border bg-surface-elevated">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-surface">
+                <ShieldCheck className="w-4 h-4 text-blue-400" />
+              </div>
+              <div>
+                <div className="text-xs text-text-muted">Sessions</div>
+                <div className="text-lg font-semibold text-text-primary tabular-nums">{String(status.sessions ?? health.sessions ?? 0)}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 rounded-xl border border-border bg-surface-elevated">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-surface">
+                <Clock className="w-4 h-4 text-amber-400" />
+              </div>
+              <div>
+                <div className="text-xs text-text-muted">Scheduler Jobs</div>
+                <div className="text-lg font-semibold text-text-primary tabular-nums">
+                  {String(status.scheduler?.jobCount ?? health.scheduler?.jobCount ?? 0)}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        </ControlPanelSection>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="p-3 rounded-lg border border-border bg-surface-elevated space-y-2">
+        <ControlPanelSection icon={Brain} label="Model Configuration" iconColor="text-purple-400">
+          <div className="p-3 rounded-xl border border-border bg-surface-elevated space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium text-text-primary">Model</div>
-              <Badge variant="outline">{providerLabel && modelLabel ? `${providerLabel} • ${modelLabel}` : "—"}</Badge>
+              <span className="text-sm text-text-primary">Active Model</span>
+              <Badge variant="outline">{providerLabel && modelLabel ? `${providerLabel} / ${modelLabel}` : "Not configured"}</Badge>
             </div>
             {providerEntries.length === 0 ? (
-              <div className="text-sm text-text-muted">Model config unavailable</div>
+              <div className="text-xs text-text-muted">Model config unavailable</div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
                   <select
                     value={modelProvider}
@@ -550,7 +645,7 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
                       setModelProvider(nextProvider)
                       setModelName(stillValid ? modelName : String(nextModels?.[0]?.id || ""))
                     }}
-                    className="px-3 py-1.5 text-sm bg-surface border border-border rounded-md text-text-primary focus:outline-none focus:ring-1 focus:ring-status-info"
+                    className="h-8 rounded-lg border border-border bg-surface px-3 text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-status-info/30"
                   >
                     {providerEntries.map(([key, val]: any) => (
                       <option key={String(key)} value={String(key)}>
@@ -561,7 +656,7 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
                   <select
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
-                    className="px-3 py-1.5 text-sm bg-surface border border-border rounded-md text-text-primary focus:outline-none focus:ring-1 focus:ring-status-info"
+                    className="h-8 rounded-lg border border-border bg-surface px-3 text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-status-info/30"
                   >
                     {models.map((m: any) => (
                       <option key={String(m?.id)} value={String(m?.id)}>
@@ -570,49 +665,68 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
                     ))}
                   </select>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={saveModelConfig} disabled={!modelProvider || !modelName || modelSaving}>
-                    {modelSaving ? "Saving..." : "Save"}
-                  </Button>
-                </div>
+                <Button size="sm" className="h-7 text-xs" onClick={saveModelConfig} disabled={!modelProvider || !modelName || modelSaving}>
+                  {modelSaving ? "Saving..." : "Save Model"}
+                </Button>
               </div>
             )}
           </div>
+        </ControlPanelSection>
 
-          <div className="p-3 rounded-lg border border-border bg-surface-elevated space-y-2">
+        <ControlPanelSection icon={Server} label="Agent Worker" iconColor="text-emerald-400">
+          <div className="p-3 rounded-xl border border-border bg-surface-elevated space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-sm font-medium text-text-primary">Agent Worker</div>
-              <Badge variant="outline">{agentStatus || "unknown"}</Badge>
+              <span className="text-sm text-text-primary">Status</span>
+              <Badge variant="outline" className={cn(
+                agentStatus === "running" ? "text-status-success border-status-success/30" :
+                agentStatus === "error" ? "text-status-error border-status-error/30" :
+                "text-text-muted"
+              )}>
+                {agentStatus || "unknown"}
+              </Badge>
             </div>
-            <div className="text-sm text-text-muted">{String(agentWorker?.message || "")}</div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={checkAgentStatus} disabled={agentWorkerLoading}>
-                {agentWorkerLoading ? "Checking..." : "Check"}
+            {agentWorker?.message && (
+              <div className="text-xs text-text-muted">{String(agentWorker.message)}</div>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={checkAgentStatus} disabled={agentWorkerLoading}>
+                {agentWorkerLoading ? "Checking..." : "Check Status"}
               </Button>
-              <Button size="sm" variant="outline" onClick={restartAgentWorker}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => showConfirm(
+                  "Restart Agent Worker",
+                  "This may open a new terminal window. Are you sure you want to restart?",
+                  restartAgentWorker
+                )}
+              >
                 Restart
               </Button>
             </div>
           </div>
-        </div>
+        </ControlPanelSection>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-text-primary">Channels</div>
+        <ControlPanelSection icon={Radio} label="Channels" iconColor="text-cyan-400">
           {channels.length === 0 ? (
-            <div className="text-sm text-text-muted">No channels reported</div>
+            <div className="text-xs text-text-muted py-2">No channels reported</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {channels.map((c: any) => (
-                <div key={String(c.id)} className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface">
-                  <div className="text-sm text-text-primary">{String(c.id)}</div>
-                  <Badge variant="outline" className={cn(c.connected ? "text-success" : "text-destructive")}>
-                    {c.connected ? "connected" : "disconnected"}
-                  </Badge>
+                <div key={String(c.id)} className="flex items-center justify-between p-2.5 rounded-lg border border-border bg-surface-elevated">
+                  <span className="text-sm text-text-primary">{String(c.id)}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className={cn("w-1.5 h-1.5 rounded-full", c.connected ? "bg-status-success" : "bg-status-error")} />
+                    <span className={cn("text-[10px]", c.connected ? "text-status-success" : "text-status-error")}>
+                      {c.connected ? "connected" : "disconnected"}
+                    </span>
+                  </span>
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </ControlPanelSection>
       </div>
     )
   }
@@ -623,54 +737,127 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
     const approved = Array.isArray(nodes?.approvedRes?.nodes) ? nodes.approvedRes.nodes : []
 
     return (
-      <div className="p-4 space-y-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-sm font-medium text-text-primary">Pairing Code</div>
-            <div className="text-sm text-text-muted">{pairingCode ? String(pairingCode) : "None active"}</div>
+      <div className="p-4 space-y-5 overflow-y-auto">
+        <ControlPanelSection icon={Hash} label="Pairing" iconColor="text-amber-400" action={
+          <Button size="sm" className="h-7 text-xs" onClick={generatePairingCode}>Generate Code</Button>
+        }>
+          <div className="p-3 rounded-xl border border-border bg-surface-elevated">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-muted">Active Code:</span>
+              {pairingCode ? (
+                <code className="text-sm font-mono text-text-primary bg-surface px-2 py-0.5 rounded">{String(pairingCode)}</code>
+              ) : (
+                <span className="text-xs text-text-muted">None active</span>
+              )}
+            </div>
           </div>
-          <Button size="sm" onClick={generatePairingCode}>
-            Generate
-          </Button>
-        </div>
+        </ControlPanelSection>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-text-primary">Connected Nodes</div>
+        <ControlPanelSection icon={Laptop} label="Connected Nodes" iconColor="text-status-info">
           {nodeList.length === 0 ? (
-            <div className="text-sm text-text-muted">No nodes</div>
+            <div className="text-xs text-text-muted py-2">No nodes connected</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {nodeList.map((n: any) => (
-                <div key={String(n.id)} className="p-3 rounded-lg border border-border bg-surface-elevated">
+                <div key={String(n.id)} className="p-3 rounded-xl border border-border bg-surface-elevated">
                   <div className="flex items-center justify-between">
-                    <div className="text-sm font-medium text-text-primary">{String(n.name || n.id)}</div>
+                    <span className="text-sm font-medium text-text-primary">{String(n.name || n.id)}</span>
                     <Badge variant="outline">{String(n.status || "unknown")}</Badge>
                   </div>
                   {Array.isArray(n.capabilities) && n.capabilities.length > 0 && (
-                    <div className="text-xs text-text-muted mt-1">
-                      {n.capabilities.slice(0, 8).map(String).join(", ")}
+                    <div className="flex items-center gap-1 mt-2 flex-wrap">
+                      {n.capabilities.slice(0, 8).map((cap: string) => (
+                        <span key={cap} className="text-[10px] px-2 py-0.5 rounded-full bg-surface border border-border text-text-muted">
+                          {String(cap)}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </ControlPanelSection>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-text-primary">Approved Nodes</div>
+        <ControlPanelSection icon={ShieldCheck} label="Approved Nodes" iconColor="text-emerald-400">
           {approved.length === 0 ? (
-            <div className="text-sm text-text-muted">No approved nodes</div>
+            <div className="text-xs text-text-muted py-2">No approved nodes</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {approved.map((n: any) => (
-                <div key={String(n.nodeId)} className="flex items-center justify-between p-3 rounded-lg border border-border bg-surface">
-                  <div className="text-sm text-text-primary">{String(n.name || n.nodeId)}</div>
-                  <Button variant="destructive" size="sm" onClick={() => revokeNodeApproval(String(n.nodeId))}>
+                <div key={String(n.nodeId)} className="flex items-center justify-between p-3 rounded-xl border border-border bg-surface-elevated">
+                  <span className="text-sm text-text-primary">{String(n.name || n.nodeId)}</span>
+                  <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => revokeNodeApproval(String(n.nodeId))}>
                     Revoke
                   </Button>
                 </div>
               ))}
+            </div>
+          )}
+        </ControlPanelSection>
+      </div>
+    )
+  }
+
+  const renderLogs = () => {
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-surface-elevated shrink-0">
+          <select
+            value={logLevel}
+            onChange={(e) => setLogLevel(e.target.value as any)}
+            className="h-8 rounded-lg border border-border bg-surface px-3 text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-status-info/30"
+          >
+            <option value="debug">Debug+</option>
+            <option value="info">Info+</option>
+            <option value="warn">Warn+</option>
+            <option value="error">Error only</option>
+          </select>
+
+          <div className="flex items-center gap-2 text-xs text-text-muted">
+            <Switch checked={logsLive} onCheckedChange={setLogsLive} />
+            <span>Live</span>
+            {logsLive && <span className="w-1.5 h-1.5 rounded-full bg-status-success animate-pulse" />}
+          </div>
+
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-text-muted tabular-nums">{logs.length} entries</span>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={clearLogs}>
+              Clear
+            </Button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {logs.length === 0 ? (
+            <EmptyModuleState icon={Terminal} title="No logs" description="No recent logs available" />
+          ) : (
+            <div className="space-y-1">
+              {logs.slice(0, 200).map((l, idx) => {
+                const level = String(l.level || "info")
+                const colors = LOG_LEVEL_COLORS[level] || LOG_LEVEL_COLORS.info
+                return (
+                  <div
+                    key={l.id || `${idx}`}
+                    className="flex items-stretch gap-0 rounded-lg border border-border bg-surface-elevated overflow-hidden"
+                  >
+                    <div className={cn("w-0.5 shrink-0", colors.stripe)} />
+                    <div className="flex-1 px-3 py-2 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-text-muted truncate font-mono">
+                          {String(l.timestamp || "")} · {String(l.source || "Gateway")}
+                        </span>
+                        <span className={cn("text-[10px] font-medium uppercase shrink-0", colors.badge)}>
+                          {level}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-xs text-text-primary font-mono whitespace-pre-wrap break-all">
+                        {String(l.message || "")}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -678,75 +865,30 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
     )
   }
 
-  const renderLogs = () => {
-    return (
-      <div className="p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <select
-            value={logLevel}
-            onChange={(e) => setLogLevel(e.target.value as any)}
-            className="px-3 py-1.5 text-sm bg-surface border border-border rounded-md text-text-primary focus:outline-none focus:ring-1 focus:ring-status-info"
-          >
-            <option value="debug">debug+</option>
-            <option value="info">info+</option>
-            <option value="warn">warn+</option>
-            <option value="error">error</option>
-          </select>
-
-          <div className="flex items-center gap-2 text-sm text-text-muted">
-            <Switch checked={logsLive} onCheckedChange={setLogsLive} />
-            Live
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={clearLogs}>
-              Clear
-            </Button>
-          </div>
-        </div>
-
-        {logs.length === 0 ? (
-          <EmptyModuleState icon={Terminal} title="No logs" description="No recent logs available" />
-        ) : (
-          <div className="space-y-2">
-            {logs.slice(0, 200).map((l, idx) => (
-              <div
-                key={l.id || `${idx}`}
-                className="p-3 rounded-lg border border-border bg-surface font-mono text-xs text-text-primary"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-text-muted truncate">
-                    {String(l.timestamp || "")} • {String(l.source || "Gateway")}
-                  </div>
-                  <Badge variant="outline">{String(l.level || "info")}</Badge>
-                </div>
-                <div className="mt-1 whitespace-pre-wrap">{String(l.message || "")}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    )
-  }
-
   function renderTree(nodes: any[]) {
     return (
-      <div className="space-y-1">
+      <div className="space-y-0.5">
         {nodes.map((n) => {
           const isDir = n.type === "directory"
           return (
             <div key={String(n.path)}>
               <button
                 className={cn(
-                  "w-full text-left px-2 py-1 rounded hover:bg-interactive-hover text-sm",
-                  workspaceSelected === n.path && "bg-surface text-text-primary"
+                  "w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors",
+                  workspaceSelected === n.path
+                    ? "bg-surface-elevated text-text-primary"
+                    : "text-text-secondary hover:bg-interactive-hover hover:text-text-primary"
                 )}
                 onClick={() => {
                   if (!isDir) openWorkspaceFile(String(n.path))
                 }}
               >
-                <span className="text-text-muted">{isDir ? "📁" : "📄"}</span>{" "}
-                <span className="text-text-primary">{String(n.name)}</span>
+                {isDir ? (
+                  <FolderOpen className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                ) : (
+                  <FileText className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                )}
+                <span className="truncate">{String(n.name)}</span>
               </button>
               {isDir && Array.isArray(n.children) && n.children.length > 0 && (
                 <div className="pl-4">{renderTree(n.children)}</div>
@@ -763,23 +905,30 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
 
     return (
       <div className="flex h-full overflow-hidden">
-        <div className="w-96 shrink-0 border-r border-border overflow-y-auto p-3">
+        <div className="w-64 shrink-0 border-r border-border overflow-y-auto p-3 bg-surface">
+          <div className="flex items-center gap-2 px-2.5 pb-2 mb-2 border-b border-border/30">
+            <FolderOpen className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">Files</span>
+          </div>
           {files.length === 0 ? (
-            <EmptyModuleState icon={FolderOpen} title="No files" description="Workspace is empty" />
+            <div className="text-xs text-text-muted px-2.5 py-4">Workspace is empty</div>
           ) : (
             renderTree(files)
           )}
         </div>
-        <div className="flex-1 overflow-hidden p-3">
+        <div className="flex-1 overflow-hidden flex flex-col">
           {!workspaceSelected ? (
             <EmptyModuleState icon={FolderOpen} title="Select a file" description="Choose a workspace file to view" />
           ) : (
-            <div className="h-full flex flex-col gap-2">
-              <div className="text-xs text-text-muted">{workspaceSelected}</div>
-              <div className="flex-1 overflow-auto rounded-lg border border-border bg-surface p-3">
-                <pre className="text-xs text-text-primary whitespace-pre-wrap">{workspaceContent}</pre>
+            <>
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface-elevated shrink-0">
+                <FileText className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                <span className="text-xs text-text-muted font-mono truncate">{workspaceSelected}</span>
               </div>
-            </div>
+              <div className="flex-1 overflow-auto p-4">
+                <pre className="text-xs text-text-primary font-mono whitespace-pre-wrap">{workspaceContent}</pre>
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -789,41 +938,53 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
   const renderMemory = () => {
     return (
       <div className="flex h-full overflow-hidden">
-        <div className="w-80 shrink-0 border-r border-border overflow-y-auto p-3 space-y-1">
+        <div className="w-64 shrink-0 border-r border-border overflow-y-auto p-3 bg-surface">
+          <div className="flex items-center gap-2 px-2.5 pb-2 mb-2 border-b border-border/30">
+            <FileText className="w-3.5 h-3.5 text-text-muted" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">Memory Files</span>
+          </div>
           {memoryFiles.length === 0 ? (
-            <EmptyModuleState icon={FileText} title="No memory files" description="Gateway returned no memory files" />
+            <div className="text-xs text-text-muted px-2.5 py-4">No memory files</div>
           ) : (
-            memoryFiles.map((f) => (
-              <button
-                key={String(f.path)}
-                className={cn(
-                  "w-full text-left px-2 py-1 rounded hover:bg-interactive-hover text-sm",
-                  memorySelected === f.path && "bg-surface text-text-primary"
-                )}
-                onClick={() => openMemoryFile(String(f.path))}
-              >
-                <span className="text-text-primary">{String(f.name || f.path)}</span>
-              </button>
-            ))
+            <div className="space-y-0.5">
+              {memoryFiles.map((f) => (
+                <button
+                  key={String(f.path)}
+                  className={cn(
+                    "w-full text-left flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors",
+                    memorySelected === f.path
+                      ? "bg-surface-elevated text-text-primary"
+                      : "text-text-secondary hover:bg-interactive-hover hover:text-text-primary"
+                  )}
+                  onClick={() => openMemoryFile(String(f.path))}
+                >
+                  <FileText className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                  <span className="truncate">{String(f.name || f.path)}</span>
+                </button>
+              ))}
+            </div>
           )}
         </div>
-        <div className="flex-1 overflow-hidden p-3">
+        <div className="flex-1 overflow-hidden flex flex-col">
           {!memorySelected ? (
-            <EmptyModuleState icon={FileText} title="Select a file" description="Choose a memory file to view/edit" />
+            <EmptyModuleState icon={FileText} title="Select a file" description="Choose a memory file to view or edit" />
           ) : (
-            <div className="h-full flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs text-text-muted">{memorySelected}</div>
-                <Button size="sm" onClick={saveMemoryFile} disabled={memorySaving}>
+            <>
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface-elevated shrink-0">
+                <FileText className="w-3.5 h-3.5 text-text-muted shrink-0" />
+                <span className="text-xs text-text-muted font-mono truncate flex-1">{memorySelected}</span>
+                <Button size="sm" className="h-7 text-xs" onClick={saveMemoryFile} disabled={memorySaving}>
                   {memorySaving ? "Saving..." : "Save"}
                 </Button>
               </div>
-              <Textarea
-                value={memoryContent}
-                onChange={(e) => setMemoryContent(e.target.value)}
-                className="flex-1 font-mono text-xs"
-              />
-            </div>
+              <div className="flex-1 overflow-hidden p-3">
+                <Textarea
+                  value={memoryContent}
+                  onChange={(e) => setMemoryContent(e.target.value)}
+                  className="h-full font-mono text-xs resize-none bg-surface border-border"
+                />
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -835,42 +996,41 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
     const pending = Array.isArray(sessions?.pending?.sessions) ? sessions.pending.sessions : []
 
     return (
-      <div className="p-4 space-y-6">
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-text-primary">Pending Sessions</div>
+      <div className="p-4 space-y-5 overflow-y-auto">
+        <ControlPanelSection icon={Clock} label="Pending Sessions" iconColor="text-amber-400">
           {pending.length === 0 ? (
-            <div className="text-sm text-text-muted">No pending sessions</div>
+            <div className="text-xs text-text-muted py-2">No pending sessions</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {pending.map((s: any) => (
-                <div key={String(s.id)} className="p-3 rounded-lg border border-border bg-surface-elevated">
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-text-primary">{String(s.id)}</div>
-                    <Badge variant="outline">pairing: {String(s.pairingCode || "")}</Badge>
-                  </div>
+                <div key={String(s.id)} className="flex items-center justify-between p-3 rounded-xl border border-border bg-surface-elevated">
+                  <span className="text-sm font-mono text-text-primary">{String(s.id)}</span>
+                  <Badge variant="outline" className="text-amber-400 border-amber-400/30">
+                    code: {String(s.pairingCode || "\u2014")}
+                  </Badge>
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </ControlPanelSection>
 
-        <div className="space-y-2">
-          <div className="text-sm font-medium text-text-primary">Approve Session</div>
-          <div className="flex items-center gap-2">
+        <ControlPanelSection icon={Key} label="Approve Session" iconColor="text-purple-400">
+          <div className="flex items-center gap-2 p-3 rounded-xl border border-border bg-surface-elevated">
             <Input
               value={approveSessionId}
               onChange={(e) => setApproveSessionId(e.target.value)}
-              placeholder="sessionId"
-              className="max-w-sm"
+              placeholder="Session ID"
+              className="max-w-[200px] h-8 text-xs bg-surface border-border"
             />
             <Input
               value={approveSessionCode}
               onChange={(e) => setApproveSessionCode(e.target.value)}
-              placeholder="optional code"
-              className="max-w-xs"
+              placeholder="Code (optional)"
+              className="max-w-[150px] h-8 text-xs bg-surface border-border"
             />
             <Button
               size="sm"
+              className="h-8 text-xs"
               onClick={() =>
                 approveSessionId &&
                 approveSession(approveSessionId, approveSessionCode || undefined)
@@ -879,38 +1039,67 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
               Approve
             </Button>
           </div>
-        </div>
+        </ControlPanelSection>
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium text-text-primary">Active Sessions</div>
-            <Button size="sm" variant="destructive" onClick={clearAllSessions} disabled={all.length === 0}>
-              Clear All
-            </Button>
-          </div>
+        <ControlPanelSection
+          icon={ShieldCheck}
+          label="Active Sessions"
+          iconColor="text-emerald-400"
+          action={
+            all.length > 0 ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-7 text-xs"
+                onClick={() => showConfirm(
+                  "Clear All Sessions",
+                  "This will remove all active sessions. This cannot be undone.",
+                  clearAllSessions
+                )}
+              >
+                Clear All
+              </Button>
+            ) : undefined
+          }
+        >
           {all.length === 0 ? (
-            <div className="text-sm text-text-muted">No active sessions</div>
+            <div className="text-xs text-text-muted py-2">No active sessions</div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {all.map((s: any) => (
-                <div key={String(s.id)} className="p-3 rounded-lg border border-border bg-surface">
+                <div key={String(s.id)} className="p-3 rounded-xl border border-border bg-surface-elevated">
                   <div className="flex items-center justify-between">
-                    <div className="text-sm text-text-primary">{String(s.id)}</div>
+                    <span className="text-sm font-mono text-text-primary">{String(s.id)}</span>
                     <div className="flex items-center gap-2">
-                      <Badge variant="outline">{s.paired ? "paired" : "unpaired"}</Badge>
-                      <Button variant="destructive" size="sm" onClick={() => deleteSession(String(s.id))}>
+                      <Badge variant="outline" className={cn(
+                        s.paired ? "text-status-success border-status-success/30" : "text-text-muted"
+                      )}>
+                        {s.paired ? "paired" : "unpaired"}
+                      </Badge>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => showConfirm(
+                          "Delete Session",
+                          `Delete session "${s.id}"? This cannot be undone.`,
+                          () => deleteSession(String(s.id))
+                        )}
+                      >
                         Delete
                       </Button>
                     </div>
                   </div>
-                  <div className="text-xs text-text-muted mt-1">
-                    {String(s.channelType || "")} • {String(s.userId || "")}
-                  </div>
+                  {(s.channelType || s.userId) && (
+                    <div className="text-[10px] text-text-muted mt-1.5">
+                      {[s.channelType, s.userId].filter(Boolean).map(String).join(" \u00b7 ")}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           )}
-        </div>
+        </ControlPanelSection>
       </div>
     )
   }
@@ -941,6 +1130,26 @@ export function Ag3ntControlPanelModule({ instanceId, agentEnabled = true, class
     <ModuleContainer config={ag3ntControlPanelModuleConfig} className={cn("flex flex-col h-full", className)} showHeader={false}>
       {viewTabs}
       <div className="flex-1 overflow-hidden bg-surface-secondary">{body}</div>
+      <AlertDialog open={confirmDialog.open} onOpenChange={(open) => !open && setConfirmDialog(prev => ({ ...prev, open: false }))}>
+        <AlertDialogContent className="bg-surface border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-text-primary">{confirmDialog.title}</AlertDialogTitle>
+            <AlertDialogDescription className="text-text-muted">{confirmDialog.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-border text-text-secondary hover:bg-interactive-hover hover:text-text-primary">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                confirmDialog.onConfirm()
+                setConfirmDialog(prev => ({ ...prev, open: false }))
+              }}
+            >
+              Confirm
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ModuleContainer>
   )
 }
