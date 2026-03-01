@@ -9,6 +9,8 @@ import logging
 import re
 from pathlib import Path
 
+from ag3nt_agent.bootstrap_budget import BootstrapBudgetManager
+
 logger = logging.getLogger(__name__)
 
 # File mapping: key -> filename
@@ -44,19 +46,34 @@ class IdentityLoader:
             path = self._base / filename
             if path.is_file():
                 try:
-                    result[key] = path.read_text(encoding="utf-8")
+                    raw = path.read_text(encoding="utf-8", errors="replace")
+                    # Strip unpaired surrogates that break upstream JSON/UTF-8 encoding
+                    result[key] = raw.encode("utf-8", errors="replace").decode("utf-8")
                 except OSError:
                     logger.debug("Failed to read %s", path)
         return result
 
     def build_system_prompt(self, *, minimal: bool = False) -> str:
-        """Build a layered system prompt from identity files."""
+        """Build a layered system prompt from identity files.
+
+        Applies per-file and total character budgets to prevent
+        oversized identity files from consuming too much context window.
+        """
         if minimal:
             return "You are AG3NT."
 
         data = self.load()
         if not data:
             return ""
+
+        # Apply character budgets to prevent oversized files
+        budget = BootstrapBudgetManager()
+        data = {
+            key: budget.apply_budget(
+                _IDENTITY_FILES.get(key, key), content
+            )
+            for key, content in data.items()
+        }
 
         parts: list[str] = []
 
