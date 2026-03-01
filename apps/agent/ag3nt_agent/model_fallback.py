@@ -54,6 +54,8 @@ class ProviderState:
     last_failure_at: float = 0.0
     last_error_type: str = ""
     cooldown_until: float = 0.0
+    # TODO: thinking_level is tracked for escalation state management.
+    # Future: pass to model config so LLM API uses elevated thinking budget.
     thinking_level: ThinkingLevel = ThinkingLevel.OFF
 
 
@@ -161,6 +163,10 @@ class ModelFallbackChain:
         state.thinking_level = next_level
         return True
 
+    def clear_cooldown(self, provider_idx: int) -> None:
+        """Clear cooldown for a provider, allowing immediate retry."""
+        self._states[provider_idx].cooldown_until = 0.0
+
     def get_next_available(self, start: int = 0) -> int | None:
         """Find the next provider not in cooldown, starting from index."""
         for i in range(len(self.providers)):
@@ -209,7 +215,7 @@ def run_with_fallback(chain: ModelFallbackChain, action, max_attempts: int = 0):
             if error_type in ("context_overflow", "timeout"):
                 if chain.escalate_thinking(idx):
                     # Clear cooldown so the same provider can be retried
-                    chain._states[idx].cooldown_until = 0.0
+                    chain.clear_cooldown(idx)
                     start_index = idx  # retry same provider with higher thinking
                     continue
             start_index = (idx + 1) % len(chain.providers)

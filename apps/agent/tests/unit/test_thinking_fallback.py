@@ -98,6 +98,32 @@ class TestRunWithFallbackThinking:
         assert result == "success"
         assert call_count == 2
 
+    def test_exhausted_escalation_falls_to_next_provider(self):
+        from ag3nt_agent.model_fallback import (
+            ModelFallbackChain, run_with_fallback,
+        )
+        chain = ModelFallbackChain(providers=[
+            {"provider": "p1", "model": "m1"},
+            {"provider": "p2", "model": "m2"},
+        ])
+        call_count = 0
+
+        def action(model):
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 4:  # First 4 calls fail (OFF, LOW, MEDIUM, HIGH on p1)
+                raise Exception("context window overflow")
+            return "success"
+
+        mock_model = MagicMock()
+        with patch(
+            "ag3nt_agent.model_fallback._create_model_for_provider",
+            return_value=mock_model,
+        ):
+            result = run_with_fallback(chain, action, max_attempts=8)
+        assert result == "success"
+        assert call_count == 5  # 4 escalation failures on p1 + 1 success on p2
+
     def test_timeout_triggers_escalation(self):
         from ag3nt_agent.model_fallback import (
             ModelFallbackChain, run_with_fallback, ThinkingLevel,
