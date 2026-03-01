@@ -269,8 +269,11 @@ export class Scheduler {
         this.runCronJob(id);
       });
     } else {
-      // Cron expression
-      scheduledJob = schedule.scheduleJob(jobDef.schedule, () => {
+      // Cron expression — pass timezone if provided
+      const scheduleSpec = jobDef.timezone
+        ? { rule: jobDef.schedule, tz: jobDef.timezone }
+        : jobDef.schedule;
+      scheduledJob = schedule.scheduleJob(scheduleSpec, () => {
         this.runCronJob(id);
       });
     }
@@ -294,6 +297,7 @@ export class Scheduler {
       channelTarget: jobDef.channelTarget,
       oneShot: jobDef.oneShot,
       name: jobDef.name,
+      timezone: jobDef.timezone,
       enabled: true,
       createdAt: now.toISOString(),
     });

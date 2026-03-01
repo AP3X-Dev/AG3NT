@@ -402,6 +402,31 @@ describe('Scheduler', () => {
       s.stop();
     });
   });
+
+  describe('Cron Timezone Support', () => {
+    it('should accept timezone in job definition', () => {
+      const jobId = scheduler.addJob({
+        schedule: '0 9 * * *',
+        message: 'morning check',
+        timezone: 'America/New_York',
+      });
+
+      expect(jobId).toBeDefined();
+      const status = scheduler.getStatus();
+      expect(status.jobCount).toBe(1);
+    });
+
+    it('should work without timezone (backward compatible)', () => {
+      const jobId = scheduler.addJob({
+        schedule: '0 9 * * *',
+        message: 'no tz',
+      });
+
+      expect(jobId).toBeDefined();
+      const status = scheduler.getStatus();
+      expect(status.jobCount).toBe(1);
+    });
+  });
 });
 
 

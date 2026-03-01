@@ -27,6 +27,8 @@ export interface CronJobDefinition {
   oneShot?: boolean;
   /** Human-readable name for the job */
   name?: string;
+  /** IANA timezone (e.g., 'America/New_York'). Defaults to system timezone. */
+  timezone?: string;
 }
 
 /**

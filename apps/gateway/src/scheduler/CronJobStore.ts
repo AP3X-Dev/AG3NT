@@ -9,6 +9,7 @@ export interface PersistedCronJob {
   channelTarget?: string;
   oneShot?: boolean;
   name?: string;
+  timezone?: string;
   enabled: boolean;
   createdAt: string;
   lastRunAt?: string;
