@@ -118,6 +118,16 @@ export type SchedulerEventHandler = (event: SchedulerEvent) => void;
 export type { RunRecord as CronJobRunRecord } from './CronJobStore.js';
 
 /**
+ * Configuration for per-session queue modes (mid-run message handling).
+ */
+export interface QueueModeSettings {
+  mode: 'follow-up' | 'collect' | 'steer';
+  cap?: number;        // default: 20
+  debounceMs?: number; // default: 1000
+  dropPolicy?: 'old' | 'new' | 'summarize';
+}
+
+/**
  * Backoff schedule (ms) for consecutive job failures: 30s, 1m, 5m, 15m, 60m.
  */
 export const ERROR_BACKOFF_MS = [30_000, 60_000, 300_000, 900_000, 3_600_000];
