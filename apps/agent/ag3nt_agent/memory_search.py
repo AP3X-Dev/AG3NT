@@ -423,6 +423,56 @@ class BM25Index:
         return raw_score / (raw_score + 10.0) if raw_score > 0 else 0.0
 
 
+# ---------------------------------------------------------------------------
+# Query expansion
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "it", "as", "be", "was", "were",
+    "been", "are", "am", "do", "does", "did", "has", "have", "had",
+    "how", "what", "when", "where", "who", "which", "that", "this",
+    "not", "no", "can", "will", "should", "would", "could", "may",
+    "might", "shall", "must", "if", "then", "than", "so", "very",
+    "just", "about", "into", "over", "after", "before", "between",
+    "under", "above", "all", "each", "every", "both", "few", "more",
+    "most", "some", "any", "such", "only", "own", "same", "too",
+})
+
+
+def _expand_query(query: str) -> list[str]:
+    """Expand a query into variant forms to improve BM25 recall.
+
+    Generates the original query plus bigram combinations from non-stop-word
+    keywords to broaden lexical matching.
+
+    Args:
+        query: The original search query.
+
+    Returns:
+        List of query strings, original first, followed by bigram variants.
+    """
+    if not query.strip():
+        return [query]
+
+    # Extract keywords: filter stop words and short tokens
+    tokens = query.lower().split()
+    keywords = [t for t in tokens if t not in _STOP_WORDS and len(t) > 2]
+
+    if not keywords:
+        return [query]
+
+    # Generate bigrams from keywords
+    variants: list[str] = [query]
+    for i in range(len(keywords)):
+        for j in range(i + 1, len(keywords)):
+            bigram = f"{keywords[i]} {keywords[j]}"
+            if bigram != query.lower():
+                variants.append(bigram)
+
+    return variants
+
+
 def _get_embeddings():
     """Get the embeddings model.
 
@@ -832,6 +882,9 @@ class MemoryVectorStore:
         import numpy as np
 
         try:
+            # Expand query for improved BM25 recall
+            expanded_queries = _expand_query(query)
+
             # Get query embedding
             query_embedding = self._embeddings.embed_query(query)
             query_np = np.array([query_embedding], dtype=np.float32)
@@ -852,12 +905,18 @@ class MemoryVectorStore:
                 semantic_score = float(1 / (1 + distances[0][i]))
 
                 # BM25 score (if enabled and index available)
+                # Score across all expanded queries and take max per document
                 bm25_score = 0.0
                 if (
                     self._search_config.enable_bm25
                     and self._bm25_index is not None
                 ):
-                    bm25_score = self._bm25_index.get_normalized_score(query, idx)
+                    bm25_score = self._bm25_index.get_normalized_score(
+                        expanded_queries[0], idx
+                    )
+                    for eq in expanded_queries[1:]:
+                        alt_score = self._bm25_index.get_normalized_score(eq, idx)
+                        bm25_score = max(bm25_score, alt_score)
 
                 # Keyword score
                 keyword_score = _compute_keyword_score(query, chunk["text"])
