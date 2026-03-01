@@ -915,7 +915,7 @@ class SubAgentMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        default_model: str | BaseChatModel,
+        default_model: str | BaseChatModel | None = None,
         default_tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
         default_middleware: list[AgentMiddleware] | None = None,
         default_interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
@@ -923,17 +923,25 @@ class SubAgentMiddleware(AgentMiddleware):
         system_prompt: str | None = TASK_SYSTEM_PROMPT,
         general_purpose_agent: bool = True,
         task_description: str | None = None,
+        backend: Any = None,
     ) -> None:
         """Initialize the `SubAgentMiddleware`."""
         super().__init__()
         self.system_prompt = system_prompt
+        self._backend = backend
         # Cache computed system messages to avoid redundant allocations.
         # Keyed by id(original_system_message), bounded to 4 entries.
         self._system_message_cache: dict[int, Any] = {}
 
+        # When no default_model is provided (new API: caller passes fully-formed
+        # subagent specs with model already set), skip GP agent creation since
+        # the caller already includes it in the subagents list.
+        if default_model is None:
+            general_purpose_agent = False
+
         # Build subagent graphs once, shared by both task and parallel_tasks tools
         subagent_graphs, subagent_descriptions = _get_subagents(
-            default_model=default_model,
+            default_model=default_model or "anthropic:claude-sonnet-4-20250514",
             default_tools=default_tools or [],
             default_middleware=default_middleware,
             default_interrupt_on=default_interrupt_on,
