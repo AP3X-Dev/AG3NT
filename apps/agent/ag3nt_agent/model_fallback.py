@@ -7,11 +7,28 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 # Backoff schedule in seconds: 30s, 1m, 5m, 15m, 60m
 ERROR_BACKOFF_SCHEDULE = [30, 60, 300, 900, 3600]
+
+
+class ThinkingLevel(str, Enum):
+    """Thinking budget levels for extended reasoning models."""
+    OFF = "off"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+    def next(self) -> ThinkingLevel | None:
+        """Return the next escalation level, or None if already at max."""
+        levels = list(ThinkingLevel)
+        idx = levels.index(self)
+        if idx + 1 < len(levels):
+            return levels[idx + 1]
+        return None
 
 
 def classify_error(error: Exception) -> str:
@@ -37,6 +54,7 @@ class ProviderState:
     last_failure_at: float = 0.0
     last_error_type: str = ""
     cooldown_until: float = 0.0
+    thinking_level: ThinkingLevel = ThinkingLevel.OFF
 
 
 def _create_model_for_provider(provider_config: dict):
@@ -124,6 +142,7 @@ class ModelFallbackChain:
         state.consecutive_errors = 0
         state.cooldown_until = 0.0
         state.last_error_type = ""
+        state.thinking_level = ThinkingLevel.OFF
 
     def is_in_cooldown(self, index: int) -> bool:
         """Check if a provider is currently in cooldown."""
@@ -132,6 +151,15 @@ class ModelFallbackChain:
     def get_consecutive_errors(self, index: int) -> int:
         """Get the consecutive error count for a provider."""
         return self._states[index].consecutive_errors
+
+    def escalate_thinking(self, provider_idx: int) -> bool:
+        """Escalate thinking level for a provider. Returns False if already at max."""
+        state = self._states[provider_idx]
+        next_level = state.thinking_level.next()
+        if next_level is None:
+            return False
+        state.thinking_level = next_level
+        return True
 
     def get_next_available(self, start: int = 0) -> int | None:
         """Find the next provider not in cooldown, starting from index."""
@@ -178,6 +206,12 @@ def run_with_fallback(chain: ModelFallbackChain, action, max_attempts: int = 0):
                 attempt + 1, max_attempts,
                 chain.providers[idx]["provider"], error_type, exc,
             )
+            if error_type in ("context_overflow", "timeout"):
+                if chain.escalate_thinking(idx):
+                    # Clear cooldown so the same provider can be retried
+                    chain._states[idx].cooldown_until = 0.0
+                    start_index = idx  # retry same provider with higher thinking
+                    continue
             start_index = (idx + 1) % len(chain.providers)
     if last_error:
         raise last_error
