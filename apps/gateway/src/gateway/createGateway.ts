@@ -32,6 +32,7 @@ import { TelegramAdapter } from "../channels/adapters/TelegramAdapter.js";
 import { DiscordAdapter } from "../channels/adapters/DiscordAdapter.js";
 import { SlackAdapter } from "../channels/adapters/SlackAdapter.js";
 import type { DMPolicy } from "../channels/types.js";
+import { ChannelDeliveryService } from "../channels/ChannelDeliveryService.js";
 import { Scheduler, type SchedulerConfig, type CronJobDefinition } from "../scheduler/index.js";
 import { CronJobStore } from "../scheduler/CronJobStore.js";
 import { SessionRecovery } from "../scheduler/SessionRecovery.js";
@@ -169,6 +170,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Initialize channel registry
   const channelRegistry = new ChannelRegistry();
 
+  // Initialize channel delivery service for scheduled notification routing
+  const channelDelivery = new ChannelDeliveryService();
+
   // Register enabled channel adapters from config
   registerChannelAdapters(config, channelRegistry);
 
@@ -286,6 +290,11 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
   // Wire channel registry message handler to router
   channelRegistry.setMessageHandler(async (message) => {
+    // Track chat ID for scheduled notification delivery
+    const adapterId = channelRegistry.all().find(a => a.type === message.channelType)?.id;
+    if (adapterId) {
+      channelDelivery.trackIncomingMessage(adapterId, message.chatId);
+    }
     return router.handleChannelMessage(message);
   });
 
@@ -359,16 +368,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
       // 2. Also notify channel adapters (Telegram, Discord, etc.)
       const adapters = channelRegistry.all();
-      const target = channelTarget
-        ? adapters.find((a) => a.type === channelTarget || a.id === channelTarget)
-        : adapters.find((a) => a.isConnected());
-
-      if (target) {
-        console.log(`[Scheduler] Notification via ${target.id}: ${message.slice(0, 100)}`);
-        // Channel adapters require a chatId for delivery; scheduled notifications
-        // currently rely on the SSE bus for UI delivery. Full channel adapter
-        // delivery will need stored chat IDs per channel.
-      }
+      await channelDelivery.deliverToType(adapters, channelTarget, message);
     },
     // Event handler: log scheduler events
     (event) => {
