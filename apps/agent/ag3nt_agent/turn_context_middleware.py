@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import platform
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Callable, Awaitable
 
 from langchain.agents.middleware.types import (
@@ -41,6 +42,19 @@ _STOPWORDS = frozenset({
 })
 
 
+class PromptMode(str, Enum):
+    """Controls how much context is injected into the system prompt.
+
+    FULL: identity + memory + ui_context + environment + summary guardrail
+    MINIMAL: environment block only (agent ID, platform, time)
+    NONE: no context injected — request returned unchanged
+    """
+
+    FULL = "full"
+    MINIMAL = "minimal"
+    NONE = "none"
+
+
 class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
     """Middleware that injects identity and memory context on every turn."""
 
@@ -49,11 +63,13 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
         identity_loader: IdentityLoader | None = None,
         memory_search_fn: Callable | None = None,
         memory_char_budget: int = 2000,
+        prompt_mode: PromptMode = PromptMode.FULL,
     ) -> None:
         self.tools = []  # Required by AgentMiddleware
         self._identity = identity_loader or IdentityLoader()
         self._memory_search = memory_search_fn
         self._memory_budget = memory_char_budget
+        self.prompt_mode = prompt_mode
 
     def wrap_model_call(
         self,
@@ -72,6 +88,18 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
         return await handler(request)
 
     def _inject_context(self, request: ModelRequest) -> ModelRequest:
+        # NONE mode: return request completely unchanged
+        if self.prompt_mode == PromptMode.NONE:
+            return request
+
+        # MINIMAL mode: environment block only
+        if self.prompt_mode == PromptMode.MINIMAL:
+            context = self._environment_block()
+            context = context.encode("utf-8", errors="replace").decode("utf-8")
+            new_sys = append_to_system_message(request.system_message, context)
+            return request.override(system_message=new_sys)
+
+        # FULL mode: identity + memory + ui_context + environment + summary guardrail
         parts: list[str] = []
 
         # 1. Identity
@@ -91,13 +119,33 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
             if memory_text:
                 parts.append(memory_text)
 
-        # 3. Environment block
+        # 3. UI context (passed via config metadata by the daemon)
+        try:
+            from langgraph.config import get_config
+            cfg = get_config()
+            ui_ctx = (cfg.get("metadata") or {}).get("ui_context")
+            if ui_ctx:
+                parts.append(f"## UI Context\n{ui_ctx}")
+        except Exception:
+            logger.debug("UI context not available", exc_info=True)
+
+        # 4. Environment block
         parts.append(self._environment_block())
+
+        # 5. Summary guardrail
+        parts.append(
+            "## Context Handling\n"
+            "If a conversation summary appears in the message history, "
+            "use it silently for context continuity. Never repeat, describe, "
+            "or reference the summary content in your response."
+        )
 
         if not parts:
             return request
 
         context = "\n\n".join(parts)
+        # Strip unpaired surrogates that break UTF-8 encoding in the LLM API call
+        context = context.encode("utf-8", errors="replace").decode("utf-8")
         new_sys = append_to_system_message(request.system_message, context)
         return request.override(system_message=new_sys)
 
