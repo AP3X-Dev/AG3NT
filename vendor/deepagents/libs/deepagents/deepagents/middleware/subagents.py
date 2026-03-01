@@ -3,6 +3,7 @@
 import asyncio
 import contextvars
 import copy
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, Any, NotRequired, TypedDict, cast
 
@@ -63,6 +64,36 @@ def _merge_value(existing: Any, incoming: Any, key: str) -> Any:
     return incoming
 
 
+class SubagentMailbox:
+    """Message queue for parent <-> child agent communication.
+
+    Safe for single-threaded async use (cooperative multitasking).
+    """
+
+    def __init__(self) -> None:
+        self._queue: deque[dict[str, str]] = deque()
+
+    def send(self, sender: str, content: str) -> None:
+        """Enqueue a message."""
+        self._queue.append({"sender": sender, "content": content})
+
+    def receive(self) -> dict[str, str] | None:
+        """Dequeue and return the next message, or None if empty."""
+        if self._queue:
+            return self._queue.popleft()
+        return None
+
+    def drain(self) -> list[dict[str, str]]:
+        """Dequeue and return all pending messages."""
+        msgs = list(self._queue)
+        self._queue.clear()
+        return msgs
+
+    def empty(self) -> bool:
+        """Check if the mailbox is empty."""
+        return len(self._queue) == 0
+
+
 class SubAgent(TypedDict):
     """Specification for an agent.
 
@@ -115,6 +146,9 @@ class SubAgent(TypedDict):
 
     interrupt_on: NotRequired[dict[str, bool | InterruptOnConfig]]
     """Configure human-in-the-loop for specific tools."""
+
+    mailbox: NotRequired[SubagentMailbox]
+    """Optional mailbox for parent <-> child message passing."""
 
 
 class CompiledSubAgent(TypedDict):
