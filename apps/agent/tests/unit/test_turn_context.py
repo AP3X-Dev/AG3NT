@@ -20,11 +20,14 @@ _mock_modules: dict[str, ModuleType] = {}
 
 
 def _ensure_mock_module(name: str) -> ModuleType:
-    """Create or return a mock module and register it in sys.modules."""
+    """Get existing mock module from sys.modules or create a new one."""
+    if name in sys.modules:
+        return sys.modules[name]
     if name in _mock_modules:
         return _mock_modules[name]
     mod = ModuleType(name)
     _mock_modules[name] = mod
+    sys.modules[name] = mod
     return mod
 
 
@@ -44,6 +47,11 @@ _lc_agents_mw_types.ModelCallResult = MagicMock()
 _lc_core = _ensure_mock_module("langchain_core")
 _lc_core_msgs = _ensure_mock_module("langchain_core.messages")
 _lc_core_msgs.SystemMessage = MagicMock()
+
+# langgraph config mock (get_config used for UI context injection)
+_lg = _ensure_mock_module("langgraph")
+_lg_config = _ensure_mock_module("langgraph.config")
+_lg_config.get_config = MagicMock(return_value={"metadata": {}})
 
 # deepagents middleware mock
 _da = _ensure_mock_module("deepagents")
@@ -330,6 +338,91 @@ class TestAwrapModelCall:
         result = await mw.awrap_model_call(request, async_handler)
         # override was called to inject environment block at minimum
         request.override.assert_called_once()
+
+
+class TestUIContextInjection:
+    def test_ui_context_injected_from_config_metadata(self):
+        """UI context from config metadata should be injected into system prompt."""
+        mock_identity = MagicMock()
+        mock_identity.build_system_prompt.return_value = ""
+
+        mw = TurnContextMiddleware(
+            identity_loader=mock_identity,
+            memory_search_fn=None,
+        )
+
+        request = MagicMock()
+        request.state = {"messages": []}
+        request.system_message = MagicMock()
+        new_request = MagicMock()
+        request.override.return_value = new_request
+
+        # Mock get_config to return ui_context in metadata
+        _lg_config.get_config = MagicMock(return_value={
+            "metadata": {"ui_context": "Active tab: Chat - working on auth"}
+        })
+
+        handler = MagicMock(return_value=MagicMock())
+        mw.wrap_model_call(request, handler)
+
+        # The override should have been called with a system message
+        request.override.assert_called_once()
+        # The appended text should contain UI Context
+        call_kwargs = request.override.call_args
+        sys_msg = call_kwargs.kwargs.get("system_message") or call_kwargs[1].get("system_message")
+        assert sys_msg is not None
+        # The mock append_to_system_message stores the appended text
+        assert "UI Context" in sys_msg._appended_text
+        assert "Active tab: Chat" in sys_msg._appended_text
+
+    def test_ui_context_not_injected_when_absent(self):
+        """When no ui_context in metadata, nothing extra should be injected."""
+        mock_identity = MagicMock()
+        mock_identity.build_system_prompt.return_value = ""
+
+        mw = TurnContextMiddleware(
+            identity_loader=mock_identity,
+            memory_search_fn=None,
+        )
+
+        request = MagicMock()
+        request.state = {"messages": []}
+        request.system_message = MagicMock()
+        new_request = MagicMock()
+        request.override.return_value = new_request
+
+        # Mock get_config with empty metadata
+        _lg_config.get_config = MagicMock(return_value={"metadata": {}})
+
+        handler = MagicMock(return_value=MagicMock())
+        mw.wrap_model_call(request, handler)
+
+        request.override.assert_called_once()
+        sys_msg = request.override.call_args.kwargs.get("system_message") or request.override.call_args[1].get("system_message")
+        assert "UI Context" not in sys_msg._appended_text
+
+    def test_ui_context_graceful_on_get_config_failure(self):
+        """If get_config raises, UI context injection should be skipped silently."""
+        mock_identity = MagicMock()
+        mock_identity.build_system_prompt.return_value = ""
+
+        mw = TurnContextMiddleware(
+            identity_loader=mock_identity,
+            memory_search_fn=None,
+        )
+
+        request = MagicMock()
+        request.state = {"messages": []}
+        request.system_message = MagicMock()
+        request.override.return_value = MagicMock()
+
+        # Make get_config raise
+        _lg_config.get_config = MagicMock(side_effect=RuntimeError("no config"))
+
+        handler = MagicMock(return_value=MagicMock())
+        # Should not raise
+        mw.wrap_model_call(request, handler)
+        handler.assert_called_once()
 
 
 class TestInit:

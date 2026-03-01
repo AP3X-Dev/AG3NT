@@ -21,10 +21,14 @@ _mock_modules: dict[str, ModuleType] = {}
 
 
 def _ensure_mock_module(name: str) -> ModuleType:
+    """Get existing mock module from sys.modules or create a new one."""
+    if name in sys.modules:
+        return sys.modules[name]
     if name in _mock_modules:
         return _mock_modules[name]
     mod = ModuleType(name)
     _mock_modules[name] = mod
+    sys.modules[name] = mod
     return mod
 
 
@@ -34,22 +38,32 @@ _lc_agents = _ensure_mock_module("langchain.agents")
 _lc_agents_mw = _ensure_mock_module("langchain.agents.middleware")
 _lc_agents_mw_types = _ensure_mock_module("langchain.agents.middleware.types")
 
-_lc_agents_mw_types.AgentMiddleware = type(
-    "AgentMiddleware", (), {"__class_getitem__": classmethod(lambda cls, *a: cls)}
-)
-_lc_agents_mw_types.AgentState = MagicMock()
-_lc_agents_mw_types.ModelRequest = MagicMock()
-_lc_agents_mw_types.ModelResponse = MagicMock()
-_lc_agents_mw_types.ModelCallResult = MagicMock()
+# Only set type stubs if not already set (another test module may have done it)
+if not hasattr(_lc_agents_mw_types, "AgentMiddleware") or not isinstance(
+    _lc_agents_mw_types.AgentMiddleware, type
+):
+    _lc_agents_mw_types.AgentMiddleware = type(
+        "AgentMiddleware", (), {"__class_getitem__": classmethod(lambda cls, *a: cls)}
+    )
+if not hasattr(_lc_agents_mw_types, "AgentState"):
+    _lc_agents_mw_types.AgentState = MagicMock()
+if not hasattr(_lc_agents_mw_types, "ModelRequest"):
+    _lc_agents_mw_types.ModelRequest = MagicMock()
+if not hasattr(_lc_agents_mw_types, "ModelResponse"):
+    _lc_agents_mw_types.ModelResponse = MagicMock()
+if not hasattr(_lc_agents_mw_types, "ModelCallResult"):
+    _lc_agents_mw_types.ModelCallResult = MagicMock()
 
 _lc_core = _ensure_mock_module("langchain_core")
 _lc_core_msgs = _ensure_mock_module("langchain_core.messages")
-_lc_core_msgs.SystemMessage = MagicMock()
+if not hasattr(_lc_core_msgs, "SystemMessage"):
+    _lc_core_msgs.SystemMessage = MagicMock()
 
 # langgraph
 _lg = _ensure_mock_module("langgraph")
 _lg_config = _ensure_mock_module("langgraph.config")
-_lg_config.get_config = MagicMock(return_value={"metadata": {}})
+if not hasattr(_lg_config, "get_config"):
+    _lg_config.get_config = MagicMock(return_value={"metadata": {}})
 
 # deepagents
 _da = _ensure_mock_module("deepagents")
@@ -64,11 +78,10 @@ def _mock_append_to_system_message(system_message, text):
     return new_msg
 
 
-_da_mw_utils.append_to_system_message = _mock_append_to_system_message
-
-# Register all
-for mod_name, mod_obj in _mock_modules.items():
-    sys.modules.setdefault(mod_name, mod_obj)
+if not hasattr(_da_mw_utils, "append_to_system_message") or not callable(
+    getattr(_da_mw_utils, "append_to_system_message", None)
+) or isinstance(_da_mw_utils.append_to_system_message, MagicMock):
+    _da_mw_utils.append_to_system_message = _mock_append_to_system_message
 
 # Now import the module under test
 from ag3nt_agent.turn_context_middleware import (  # noqa: E402
@@ -82,6 +95,19 @@ from ag3nt_agent.identity import IdentityLoader  # noqa: E402
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _get_lg_config_module():
+    """Get the langgraph.config module from sys.modules (always the canonical one)."""
+    return sys.modules["langgraph.config"]
+
+
+@pytest.fixture(autouse=True)
+def _reset_get_config_mock():
+    """Save and restore get_config mock to prevent cross-test leaks."""
+    lg_mod = _get_lg_config_module()
+    saved = lg_mod.get_config
+    yield
+    lg_mod.get_config = saved
+
 
 def _make_request(*, messages=None, ui_context=None):
     """Build a mock ModelRequest for testing _inject_context."""
@@ -92,8 +118,9 @@ def _make_request(*, messages=None, ui_context=None):
     new_request = MagicMock()
     request.override.return_value = new_request
 
-    # Mock get_config for UI context
-    _lg_config.get_config = MagicMock(
+    # Mock get_config for UI context — always use the canonical sys.modules entry
+    lg_mod = _get_lg_config_module()
+    lg_mod.get_config = MagicMock(
         return_value={"metadata": {"ui_context": ui_context} if ui_context else {}}
     )
     return request, new_request
