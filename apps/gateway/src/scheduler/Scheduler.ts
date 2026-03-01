@@ -298,6 +298,7 @@ export class Scheduler {
       oneShot: jobDef.oneShot,
       name: jobDef.name,
       timezone: jobDef.timezone,
+      deliveryMode: jobDef.deliveryMode,
       enabled: true,
       createdAt: now.toISOString(),
     });
@@ -430,8 +431,9 @@ export class Scheduler {
         response: result.text,
       });
 
-      // Notify channel with response
-      if (result.notify) {
+      // Notify channel with response (unless background mode)
+      const deliveryMode = job.deliveryMode ?? 'notify';
+      if (result.notify && deliveryMode !== 'background') {
         await this.notifier(job.channelTarget, result.text, {
           jobId,
           jobName: job.name,

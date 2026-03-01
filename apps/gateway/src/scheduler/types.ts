@@ -12,6 +12,13 @@
 export type SessionMode = "isolated" | "main";
 
 /**
+ * Delivery mode for cron job results.
+ * - "notify": Send notification to channel (default)
+ * - "background": Store result only, no notification
+ */
+export type DeliveryMode = "notify" | "background";
+
+/**
  * Definition for creating a cron job.
  */
 export interface CronJobDefinition {
@@ -29,6 +36,8 @@ export interface CronJobDefinition {
   name?: string;
   /** IANA timezone (e.g., 'America/New_York'). Defaults to system timezone. */
   timezone?: string;
+  /** Delivery mode: 'notify' (default) sends notification, 'background' stores result only. */
+  deliveryMode?: DeliveryMode;
 }
 
 /**

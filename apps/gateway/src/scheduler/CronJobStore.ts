@@ -10,6 +10,7 @@ export interface PersistedCronJob {
   oneShot?: boolean;
   name?: string;
   timezone?: string;
+  deliveryMode?: 'notify' | 'background';
   enabled: boolean;
   createdAt: string;
   lastRunAt?: string;

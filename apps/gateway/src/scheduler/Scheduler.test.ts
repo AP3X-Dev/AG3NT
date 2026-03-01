@@ -427,6 +427,79 @@ describe('Scheduler', () => {
       expect(status.jobCount).toBe(1);
     });
   });
+
+  describe('Cron Delivery Modes', () => {
+    it('should notify by default (deliveryMode=notify)', async () => {
+      const handler: ScheduledMessageHandler = vi.fn()
+        .mockResolvedValue({ text: 'result', notify: true });
+
+      const s = new Scheduler(config, handler, mockNotifier);
+      const jobId = s.addJob({
+        schedule: '*/5 * * * *',
+        message: 'test',
+        channelTarget: 'chan1',
+      });
+
+      await s['runCronJob'](jobId);
+
+      expect(mockNotifier).toHaveBeenCalledWith(
+        'chan1',
+        'result',
+        expect.any(Object),
+      );
+
+      s.stop();
+    });
+
+    it('should NOT notify when deliveryMode=background', async () => {
+      const handler: ScheduledMessageHandler = vi.fn()
+        .mockResolvedValue({ text: 'background result', notify: true });
+
+      const bgNotifier = vi.fn().mockResolvedValue(undefined);
+      const s = new Scheduler(config, handler, bgNotifier);
+      const jobId = s.addJob({
+        schedule: '*/5 * * * *',
+        message: 'bg test',
+        deliveryMode: 'background',
+        channelTarget: 'chan1',
+      });
+
+      await s['runCronJob'](jobId);
+
+      // Should NOT call notifier even though handler returned notify: true
+      expect(bgNotifier).not.toHaveBeenCalled();
+
+      s.stop();
+    });
+
+    it('should still record run history in background mode', async () => {
+      const mockStore = {
+        save: vi.fn(),
+        recordRun: vi.fn(),
+        loadAll: vi.fn().mockReturnValue([]),
+        getRunHistory: vi.fn().mockReturnValue([]),
+      };
+
+      const handler: ScheduledMessageHandler = vi.fn()
+        .mockResolvedValue({ text: 'bg', notify: false });
+
+      const s = new Scheduler(config, handler, mockNotifier, undefined, mockStore as any);
+      const jobId = s.addJob({
+        schedule: '*/5 * * * *',
+        message: 'bg test',
+        deliveryMode: 'background',
+      });
+
+      await s['runCronJob'](jobId);
+
+      expect(mockStore.recordRun).toHaveBeenCalledWith(
+        jobId,
+        expect.objectContaining({ status: 'ok' }),
+      );
+
+      s.stop();
+    });
+  });
 });
 
 
