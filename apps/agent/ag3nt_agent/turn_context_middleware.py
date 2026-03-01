@@ -206,3 +206,25 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
     def _environment_block() -> str:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return f"## Environment\nPlatform: {platform.system()}\nCurrent time: {now}"
+
+    def _build_skills_manifest(self, skills_metadata: dict[str, dict]) -> str:
+        """Build a compact skills manifest for the system prompt.
+
+        Args:
+            skills_metadata: Dict mapping skill name to metadata dict
+                             (must have 'name' and 'description' keys).
+
+        Returns:
+            Formatted manifest string, or empty string if no skills or
+            prompt mode is not FULL.
+        """
+        if self.prompt_mode != PromptMode.FULL:
+            return ""
+        if not skills_metadata:
+            return ""
+        lines = ["## Available Skills"]
+        for meta in skills_metadata.values():
+            name = meta.get("name", "unknown")
+            desc = meta.get("description", "")
+            lines.append(f"- **{name}**: {desc}")
+        return "\n".join(lines)
