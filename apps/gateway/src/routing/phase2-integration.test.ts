@@ -82,7 +82,7 @@ describe('Phase 2 Integration', () => {
   it('should persist push tokens and deliver via channel adapter', async () => {
     // Register push token
     const push = new PushNotificationService(tmpDir, { teamId: 'T', keyId: 'K', privateKey: 'PK' });
-    push.registerToken({ nodeId: 'iphone-1', token: 'device-token-abc', topic: 'com.ag3nt', environment: 'sandbox' });
+    await push.registerToken({ nodeId: 'iphone-1', token: 'device-token-abc', topic: 'com.ag3nt', environment: 'sandbox' });
 
     // Verify persistence — new instance reads from disk
     const push2 = new PushNotificationService(tmpDir, { teamId: 'T', keyId: 'K', privateKey: 'PK' });

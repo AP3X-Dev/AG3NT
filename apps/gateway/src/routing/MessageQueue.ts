@@ -251,7 +251,8 @@ export class QueueManager {
 
   /**
    * Submit a message for processing.
-   * If queueing is disabled, processes immediately.
+   * If the session has an active QueueModeManager, mid-run messages are
+   * buffered there instead of creating new queue items.
    * Returns a promise that resolves with the response.
    */
   submit(
@@ -259,6 +260,31 @@ export class QueueManager {
     session: EnhancedSession,
     routingDecision: RoutingDecision,
   ): Promise<ChannelResponse> {
+    // Check if session has an active QueueModeManager (mid-run message handling)
+    const modeMgr = this.sessionQueueModes.get(session.id);
+    if (modeMgr) {
+      const accepted = modeMgr.enqueue({
+        text: message.text,
+        sessionId: session.id,
+        channelType: message.channelType,
+        chatId: message.chatId,
+        timestamp: Date.now(),
+        metadata: message.metadata,
+      });
+
+      if (!accepted) {
+        return Promise.resolve({
+          text: 'Message queue is full. Please wait for the current response to complete.',
+          metadata: { queueModeDrop: true, sessionId: session.id },
+        });
+      }
+
+      return Promise.resolve({
+        text: '',
+        metadata: { queued: true, sessionId: session.id, mode: modeMgr.getStats().mode },
+      });
+    }
+
     // Rate limit check
     if (!this.rateLimiter.tryAcquire(session.id, session.quotas)) {
       this.stats.totalRejected++;
@@ -421,10 +447,81 @@ export class QueueManager {
 
       const response = await this.processHandler(item);
       this.stats.totalProcessed++;
+
+      // After processing, drain any mid-run messages collected by QueueModeManager
+      const modeMgr = this.sessionQueueModes.get(item.session.id);
+      if (modeMgr && modeMgr.size() > 0 && modeMgr.isReady()) {
+        await this.processCollectedMessages(modeMgr, item);
+      }
+
       return response;
     } finally {
       this.stats.processing--;
       this.rateLimiter.release(item.session.id);
+    }
+  }
+
+  /**
+   * Process messages collected by QueueModeManager after the primary turn completes.
+   * In collect mode, combines all messages into a single prompt.
+   * In follow-up/steer mode, drains individual messages and processes them as new turns.
+   */
+  private async processCollectedMessages(
+    modeMgr: QueueModeManager,
+    originalItem: QueueItem,
+  ): Promise<void> {
+    if (!this.processHandler) return;
+
+    const stats = modeMgr.getStats();
+
+    if (stats.mode === 'collect') {
+      // Combine all collected messages into a single prompt
+      const collected = modeMgr.drainCollected();
+      if (!collected) return;
+
+      const collectItem: QueueItem = {
+        id: randomUUID(),
+        message: { ...originalItem.message, text: collected },
+        session: originalItem.session,
+        priority: originalItem.priority,
+        enqueuedAt: Date.now(),
+        routingDecision: originalItem.routingDecision,
+        resolve: () => {},
+        reject: () => {},
+      };
+
+      try {
+        await this.processHandler(collectItem);
+        this.stats.totalProcessed++;
+      } catch {
+        // Errors in follow-up processing are logged but don't break the primary response
+      }
+    } else {
+      // follow-up and steer: drain individual messages
+      const messages = modeMgr.drain();
+      for (const msg of messages) {
+        const followUpItem: QueueItem = {
+          id: randomUUID(),
+          message: {
+            ...originalItem.message,
+            text: msg.text,
+            metadata: msg.metadata,
+          },
+          session: originalItem.session,
+          priority: originalItem.priority,
+          enqueuedAt: msg.timestamp,
+          routingDecision: originalItem.routingDecision,
+          resolve: () => {},
+          reject: () => {},
+        };
+
+        try {
+          await this.processHandler(followUpItem);
+          this.stats.totalProcessed++;
+        } catch {
+          // Continue processing remaining messages even if one fails
+        }
+      }
     }
   }
 }

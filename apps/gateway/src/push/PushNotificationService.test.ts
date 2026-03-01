@@ -22,8 +22,8 @@ describe('PushNotificationService', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should register a push token', () => {
-    const result = service.registerToken({
+  it('should register a push token', async () => {
+    const result = await service.registerToken({
       nodeId: 'node-1',
       token: 'device-token-abc',
       topic: 'com.ag3nt.app',
@@ -39,8 +39,8 @@ describe('PushNotificationService', () => {
     expect(new Date(result.updatedAt).toISOString()).toBe(result.updatedAt);
   });
 
-  it('should persist and reload tokens', () => {
-    service.registerToken({
+  it('should persist and reload tokens', async () => {
+    await service.registerToken({
       nodeId: 'node-1',
       token: 'device-token-abc',
       topic: 'com.ag3nt.app',
@@ -56,15 +56,15 @@ describe('PushNotificationService', () => {
     expect(tokens[0].nodeId).toBe('node-1');
   });
 
-  it('should update token for same nodeId', () => {
-    service.registerToken({
+  it('should update token for same nodeId', async () => {
+    await service.registerToken({
       nodeId: 'node-1',
       token: 'old-token',
       topic: 'com.ag3nt.app',
       environment: 'sandbox',
     });
 
-    service.registerToken({
+    await service.registerToken({
       nodeId: 'node-1',
       token: 'new-token',
       topic: 'com.ag3nt.app',
@@ -77,22 +77,22 @@ describe('PushNotificationService', () => {
     expect(tokens[0].environment).toBe('production');
   });
 
-  it('should remove a token', () => {
-    service.registerToken({
+  it('should remove a token', async () => {
+    await service.registerToken({
       nodeId: 'node-1',
       token: 'device-token-abc',
       topic: 'com.ag3nt.app',
       environment: 'sandbox',
     });
 
-    service.registerToken({
+    await service.registerToken({
       nodeId: 'node-2',
       token: 'device-token-def',
       topic: 'com.ag3nt.app',
       environment: 'production',
     });
 
-    service.removeToken('node-1');
+    await service.removeToken('node-1');
 
     const tokens1 = service.getTokensForNode('node-1');
     const tokens2 = service.getTokensForNode('node-2');
@@ -174,22 +174,22 @@ describe('PushNotificationService', () => {
     }
   });
 
-  it('should list all registered nodes', () => {
-    service.registerToken({
+  it('should list all registered nodes', async () => {
+    await service.registerToken({
       nodeId: 'node-alpha',
       token: 'token-a',
       topic: 'com.ag3nt.app',
       environment: 'sandbox',
     });
 
-    service.registerToken({
+    await service.registerToken({
       nodeId: 'node-beta',
       token: 'token-b',
       topic: 'com.ag3nt.app',
       environment: 'production',
     });
 
-    service.registerToken({
+    await service.registerToken({
       nodeId: 'node-gamma',
       token: 'token-c',
       topic: 'com.ag3nt.app',

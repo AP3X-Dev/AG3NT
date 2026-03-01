@@ -14,7 +14,7 @@ import type { PushNotificationService } from "../push/PushNotificationService.js
 export function createPushRouter(service: PushNotificationService): Router {
   const router = Router();
 
-  router.post("/register", (req, res) => {
+  router.post("/register", async (req, res) => {
     const { nodeId, token, topic, environment } = req.body ?? {};
     if (!nodeId || !token || !topic) {
       res.status(400).json({
@@ -36,7 +36,7 @@ export function createPushRouter(service: PushNotificationService): Router {
       return;
     }
     const env = environment === "production" ? "production" : "sandbox";
-    const registration = service.registerToken({
+    const registration = await service.registerToken({
       nodeId,
       token,
       topic,
@@ -45,8 +45,8 @@ export function createPushRouter(service: PushNotificationService): Router {
     res.json({ ok: true, registration });
   });
 
-  router.delete("/register/:nodeId", (req, res) => {
-    service.removeToken(req.params.nodeId);
+  router.delete("/register/:nodeId", async (req, res) => {
+    await service.removeToken(req.params.nodeId);
     res.json({ ok: true });
   });
 

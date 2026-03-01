@@ -119,7 +119,7 @@ describe("Push Routes", () => {
 
   describe("DELETE /push/register/:nodeId", () => {
     it("should unregister a node", async () => {
-      service.registerToken({
+      await service.registerToken({
         nodeId: "node-1",
         token: "abc",
         topic: "com.app",
@@ -147,13 +147,13 @@ describe("Push Routes", () => {
     });
 
     it("should list all registered nodes", async () => {
-      service.registerToken({
+      await service.registerToken({
         nodeId: "n1",
         token: "a",
         topic: "com.app",
         environment: "sandbox",
       });
-      service.registerToken({
+      await service.registerToken({
         nodeId: "n2",
         token: "b",
         topic: "com.app",
@@ -172,7 +172,7 @@ describe("Push Routes", () => {
     });
 
     it("should include token details for each node", async () => {
-      service.registerToken({
+      await service.registerToken({
         nodeId: "n1",
         token: "tok-a",
         topic: "com.app",
@@ -190,7 +190,7 @@ describe("Push Routes", () => {
 
   describe("POST /push/test", () => {
     it("should return test payload for registered node", async () => {
-      service.registerToken({
+      await service.registerToken({
         nodeId: "n1",
         token: "device-tok",
         topic: "com.app",
@@ -207,7 +207,7 @@ describe("Push Routes", () => {
     });
 
     it("should accept custom title and body", async () => {
-      service.registerToken({
+      await service.registerToken({
         nodeId: "n1",
         token: "tok",
         topic: "com.app",

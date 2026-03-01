@@ -1,4 +1,5 @@
 import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 
 export interface ApnsAuthConfig {
@@ -58,13 +59,13 @@ export class PushNotificationService {
     }
   }
 
-  private saveTokens(): void {
+  private async saveTokens(): Promise<void> {
     const dir = path.dirname(this.tokensPath);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.tokensPath, JSON.stringify(this.tokens, null, 2));
+    await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(this.tokensPath, JSON.stringify(this.tokens, null, 2));
   }
 
-  registerToken(params: Omit<PushTokenRegistration, 'updatedAt'>): PushTokenRegistration {
+  async registerToken(params: Omit<PushTokenRegistration, 'updatedAt'>): Promise<PushTokenRegistration> {
     const registration: PushTokenRegistration = {
       ...params,
       updatedAt: new Date().toISOString(),
@@ -77,13 +78,13 @@ export class PushNotificationService {
       this.tokens.push(registration);
     }
 
-    this.saveTokens();
+    await this.saveTokens();
     return registration;
   }
 
-  removeToken(nodeId: string): void {
+  async removeToken(nodeId: string): Promise<void> {
     this.tokens = this.tokens.filter(t => t.nodeId !== nodeId);
-    this.saveTokens();
+    await this.saveTokens();
   }
 
   getTokensForNode(nodeId: string): PushTokenRegistration[] {
