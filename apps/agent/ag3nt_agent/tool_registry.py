@@ -46,6 +46,7 @@ TOOL_REGISTRY: list[tuple[str, str, str]] = [
     ("external_path", "ag3nt_agent.external_path_tool", "get_external_access_tools"),
     ("session_search", "ag3nt_agent.session_search_tool", "get_session_search_tool"),
     ("image_tools", "ag3nt_agent.generate_image_tool", "get_image_tools"),
+    ("create_skill", "ag3nt_agent.create_skill_tool", "get_create_skill_tools"),
 ]
 
 
@@ -116,17 +117,8 @@ def load_tools(
                 tools.append(result)
                 logger.info("%s tool loaded", name)
 
-    # Wrap tools with event emission if autonomous system is running
-    try:
-        from ag3nt_agent.deepagents_runtime import _autonomous_runtime
-        runtime = _autonomous_runtime
-        if runtime is not None and runtime.is_running:
-            from ag3nt_agent.bus.tool_wrapper import wrap_tools_with_events
-            bus = runtime.event_bus
-            if bus is not None:
-                tools = wrap_tools_with_events(tools, bus)
-                logger.info("Tools wrapped with event emission (%d tools)", len(tools))
-    except Exception as exc:
-        logger.debug("Event wrapping skipped: %s", exc)
+    # NOTE: Tool event wrapping is handled by start_autonomous_system()
+    # in deepagents_runtime.py AFTER the autonomous system boots. This avoids
+    # the race condition where _autonomous_runtime is None at tool-load time.
 
     return tools
