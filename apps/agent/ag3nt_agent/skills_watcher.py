@@ -52,7 +52,11 @@ class SkillsWatcher:
                 logger.warning("[SkillsWatcher] Callback error: %s", e)
 
     def start(self) -> None:
-        """Start watching (connects to existing file watcher infrastructure)."""
+        """Start watching (connects to existing file watcher infrastructure).
+
+        TODO: Connect to watchdog Observer or ProjectFileWatcher to get real
+        filesystem events. Currently requires manual _handle_change() calls.
+        """
         logger.info(
             "[SkillsWatcher] Watching %d directories for skill changes",
             len(self._watch_dirs),

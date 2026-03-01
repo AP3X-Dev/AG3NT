@@ -26,11 +26,14 @@ def _build_skill_content(
     """Build a SKILL.md file with YAML frontmatter."""
     lines = ["---"]
     lines.append(f"name: {name}")
-    lines.append(f"description: {description}")
+    # Quote description to prevent YAML injection
+    safe_desc = description.replace('"', '\\"')
+    lines.append(f'description: "{safe_desc}"')
     if triggers:
         lines.append("triggers:")
         for t in triggers:
-            lines.append(f"  - {t.strip()}")
+            safe_trigger = t.strip().replace('"', '\\"')
+            lines.append(f'  - "{safe_trigger}"')
     lines.append("---")
     lines.append("")
     if body:

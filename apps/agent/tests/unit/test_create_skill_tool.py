@@ -39,9 +39,9 @@ class TestBuildSkillContent:
         )
         assert "---" in content
         assert "name: my-tool" in content
-        assert "description: A test tool" in content
+        assert 'description: "A test tool"' in content
         assert "triggers:" in content
-        assert "  - run my-tool" in content
+        assert '  - "run my-tool"' in content
         assert "## Usage" in content
 
     def test_without_triggers(self):
@@ -69,8 +69,8 @@ class TestCreateSkillTool:
         text = skill_path.read_text()
         assert "name: test-skill" in text
         assert "## Instructions" in text
-        assert "  - do the thing" in text
-        assert "  - run test" in text
+        assert '  - "do the thing"' in text
+        assert '  - "run test"' in text
 
     def test_rejects_invalid_skill_name(self):
         result = create_skill.invoke({

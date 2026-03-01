@@ -103,7 +103,8 @@ class BootstrapBudgetManager:
         if pos <= 0:
             return text
         nl = text.find("\n", pos)
-        if nl >= 0 and nl < pos + len(text) * 0.1:
+        tail_size = len(text) - pos
+        if nl >= 0 and nl < pos + tail_size * 0.2:
             return text[nl + 1 :]
         return text[pos:]
 
