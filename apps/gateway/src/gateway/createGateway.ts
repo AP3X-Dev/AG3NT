@@ -34,6 +34,7 @@ import { SlackAdapter } from "../channels/adapters/SlackAdapter.js";
 import type { DMPolicy } from "../channels/types.js";
 import { Scheduler, type SchedulerConfig, type CronJobDefinition } from "../scheduler/index.js";
 import { CronJobStore } from "../scheduler/CronJobStore.js";
+import { SessionRecovery } from "../scheduler/SessionRecovery.js";
 import { NodeRegistry, NodeConnectionManager, PairingManager } from "../nodes/index.js";
 import { SkillsManager } from "../skills/index.js";
 import { gatewayLogs } from "../logs/index.js";
@@ -61,7 +62,7 @@ import { createHealthRoutes } from "../routes/health.js";
 import { createNotificationsRouter, emitScheduledMessage } from "../routes/notifications.js";
 import { validateWorkspacePath } from "../utils/pathSecurity.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
-import { HEARTBEAT_DEFAULTS } from "../config/constants.js";
+// HEARTBEAT_DEFAULTS available in ../config/constants.js for future active-hours configuration
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -325,6 +326,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Create persistent cron job store
   const cronStorePath = path.join(os.homedir(), '.ag3nt', 'cron');
   const cronJobStore = new CronJobStore(cronStorePath);
+
+  // Create session recovery for gateway state persistence
+  const sessionRecovery = new SessionRecovery(userDataPath);
 
   const scheduler = new Scheduler(
     schedulerConfig,
@@ -1681,6 +1685,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
       // Start the scheduler
       scheduler.start();
 
+      // Checkpoint gateway state on startup
+      sessionRecovery.checkpoint({
+        lastHeartbeat: null,
+        activeSessions: [],
+        schedulerRunning: true,
+      });
+
       // Start plugin services
       if (pluginRegistry) {
         const serviceContext = {
@@ -1727,6 +1738,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
         };
         await stopServices(pluginRegistry, serviceContext);
       }
+
+      // Save gateway state before shutdown
+      sessionRecovery.checkpoint({
+        lastHeartbeat: scheduler.getLastHeartbeat()?.toISOString() ?? null,
+        activeSessions: [],
+        schedulerRunning: false,
+      });
 
       // Stop the scheduler
       scheduler.stop();

@@ -84,12 +84,9 @@ class ModelFallbackChain:
             })
         for provider, key_var, default_model in provider_keys:
             if os.environ.get(key_var):
-                entry = {"provider": provider, "model": default_model}
-                if not any(
-                    p["provider"] == provider and p["model"] == default_model
-                    for p in providers
-                ):
-                    providers.append(entry)
+                # Deduplicate by provider to avoid two entries for the same provider
+                if not any(p["provider"] == provider for p in providers):
+                    providers.append({"provider": provider, "model": default_model})
         if not providers:
             providers.append({
                 "provider": "anthropic",

@@ -113,13 +113,9 @@ export type SchedulerEventHandler = (event: SchedulerEvent) => void;
 
 /**
  * Record of a single cron job execution.
+ * Canonical type re-exported from CronJobStore.
  */
-export interface CronJobRunRecord {
-  status: 'ok' | 'error' | 'skipped';
-  startedAt: string;
-  durationMs: number;
-  error?: string;
-}
+export type { RunRecord as CronJobRunRecord } from './CronJobStore.js';
 
 /**
  * Backoff schedule (ms) for consecutive job failures: 30s, 1m, 5m, 15m, 60m.

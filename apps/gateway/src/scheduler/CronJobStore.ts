@@ -23,6 +23,7 @@ export interface RunRecord {
 }
 
 const MAX_RUN_HISTORY = 100;
+const VALID_JOB_ID = /^[a-zA-Z0-9_-]+$/;
 
 export class CronJobStore {
   private jobsPath: string;
@@ -31,6 +32,12 @@ export class CronJobStore {
   constructor(baseDir: string) {
     this.jobsPath = path.join(baseDir, 'jobs.json');
     this.runsDir = path.join(baseDir, 'runs');
+  }
+
+  private validateJobId(jobId: string): void {
+    if (!VALID_JOB_ID.test(jobId)) {
+      throw new Error(`Invalid job ID: ${jobId}`);
+    }
   }
 
   loadAll(): PersistedCronJob[] {
@@ -69,6 +76,7 @@ export class CronJobStore {
   }
 
   recordRun(jobId: string, record: RunRecord): void {
+    this.validateJobId(jobId);
     const filePath = path.join(this.runsDir, `${jobId}.json`);
     let history: RunRecord[] = [];
     try {
@@ -85,6 +93,7 @@ export class CronJobStore {
   }
 
   getRunHistory(jobId: string): RunRecord[] {
+    this.validateJobId(jobId);
     const filePath = path.join(this.runsDir, `${jobId}.json`);
     try {
       if (!fs.existsSync(filePath)) return [];

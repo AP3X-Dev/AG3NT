@@ -54,5 +54,4 @@ export const HEARTBEAT_DEFAULTS = {
     end: '22:00',
     timezone: 'UTC',
   },
-  ackMaxChars: 300,
 };

@@ -12,7 +12,6 @@ export interface HeartbeatConfig {
   };
   agentHandler: (prompt: string, sessionId: string) => Promise<{ content: string }>;
   notifier: (message: string) => Promise<void>;
-  ackMaxChars?: number;
 }
 
 const DEFAULT_HEARTBEAT_PROMPT = `You are performing a routine heartbeat check. Review the checklist below and determine if anything needs the user's attention.
@@ -32,11 +31,9 @@ export class HeartbeatRunner {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private lastRun: Date | null = null;
-  private ackMaxChars: number;
 
   constructor(config: HeartbeatConfig) {
     this.config = config;
-    this.ackMaxChars = config.ackMaxChars ?? 300;
   }
 
   start(): void {
@@ -114,10 +111,6 @@ export class HeartbeatRunner {
       return false;
     }
     return true;
-  }
-
-  private isHeartbeatOk(content: string): boolean {
-    return content.includes('HEARTBEAT_OK');
   }
 
   private stripHeartbeatOk(content: string): string {
