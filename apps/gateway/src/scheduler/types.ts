@@ -71,11 +71,22 @@ export type ScheduledMessageHandler = (
 ) => Promise<{ text: string; notify: boolean }>;
 
 /**
+ * Metadata attached to a scheduler notification.
+ */
+export interface NotificationMetadata {
+  jobId?: string;
+  jobName?: string;
+  type?: "reminder" | "cron";
+  sessionId?: string;
+}
+
+/**
  * Callback for sending notifications to channels.
  */
 export type ChannelNotifier = (
   channelTarget: string | undefined,
-  message: string
+  message: string,
+  metadata?: NotificationMetadata
 ) => Promise<void>;
 
 /**
@@ -93,4 +104,19 @@ export interface SchedulerEvent {
  * Scheduler event handler.
  */
 export type SchedulerEventHandler = (event: SchedulerEvent) => void;
+
+/**
+ * Record of a single cron job execution.
+ */
+export interface CronJobRunRecord {
+  status: 'ok' | 'error' | 'skipped';
+  startedAt: string;
+  durationMs: number;
+  error?: string;
+}
+
+/**
+ * Backoff schedule (ms) for consecutive job failures: 30s, 1m, 5m, 15m, 60m.
+ */
+export const ERROR_BACKOFF_MS = [30_000, 60_000, 300_000, 900_000, 3_600_000];
 

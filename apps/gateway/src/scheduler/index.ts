@@ -15,5 +15,7 @@ export type {
   SchedulerEventHandler,
   SessionMode,
   HeartbeatConfig,
+  CronJobRunRecord,
 } from "./types.js";
+export { ERROR_BACKOFF_MS } from "./types.js";
 

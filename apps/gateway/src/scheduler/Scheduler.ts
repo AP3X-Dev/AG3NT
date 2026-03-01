@@ -15,6 +15,8 @@ import type {
   SchedulerEvent,
   SchedulerEventHandler,
 } from "./types.js";
+import { ERROR_BACKOFF_MS } from "./types.js";
+import type { CronJobStore } from "./CronJobStore.js";
 
 /**
  * Parse relative time string (e.g., "in 10 minutes") to a Date.
@@ -47,6 +49,7 @@ export class Scheduler {
   private messageHandler: ScheduledMessageHandler;
   private notifier: ChannelNotifier;
   private eventHandler?: SchedulerEventHandler;
+  private store?: CronJobStore;
 
   // Heartbeat state
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -57,22 +60,30 @@ export class Scheduler {
   private jobs = new Map<string, { job: CronJob; scheduled: schedule.Job }>();
   private jobCounter = 0;
 
+  // Error tracking for backoff
+  private consecutiveErrors = new Map<string, number>();
+
   constructor(
     config: SchedulerConfig,
     messageHandler: ScheduledMessageHandler,
     notifier: ChannelNotifier,
-    eventHandler?: SchedulerEventHandler
+    eventHandler?: SchedulerEventHandler,
+    store?: CronJobStore
   ) {
     this.config = config;
     this.messageHandler = messageHandler;
     this.notifier = notifier;
     this.eventHandler = eventHandler;
+    this.store = store;
   }
 
   /**
    * Start the scheduler (heartbeat and cron jobs).
    */
   start(): void {
+    // Restore persisted jobs from store before anything else
+    this.restorePersistedJobs();
+
     // Start heartbeat if configured
     if (this.config.heartbeat.intervalMinutes > 0) {
       this.startHeartbeat();
@@ -217,6 +228,20 @@ export class Scheduler {
     };
 
     this.jobs.set(id, { job: cronJob, scheduled: scheduledJob });
+
+    // Persist to store
+    this.store?.save({
+      id,
+      schedule: jobDef.schedule,
+      message: jobDef.message,
+      sessionMode: jobDef.sessionMode,
+      channelTarget: jobDef.channelTarget,
+      oneShot: jobDef.oneShot,
+      name: jobDef.name,
+      enabled: true,
+      createdAt: now.toISOString(),
+    });
+
     console.log(`[Scheduler] Added job ${id}: "${jobDef.name ?? jobDef.message.slice(0, 30)}"`);
 
     return id;
@@ -231,6 +256,8 @@ export class Scheduler {
 
     entry.scheduled.cancel();
     this.jobs.delete(jobId);
+    this.consecutiveErrors.delete(jobId);
+    this.store?.delete(jobId);
     console.log(`[Scheduler] Removed job ${jobId}`);
     return true;
   }
@@ -254,6 +281,7 @@ export class Scheduler {
 
     entry.scheduled.cancel();
     entry.job.paused = true;
+    this.store?.updateEnabled(jobId, false);
     console.log(`[Scheduler] Paused job ${jobId}`);
     return true;
   }
@@ -281,6 +309,7 @@ export class Scheduler {
 
     entry.scheduled = newScheduled;
     entry.job.paused = false;
+    this.store?.updateEnabled(jobId, true);
     console.log(`[Scheduler] Resumed job ${jobId}`);
     return true;
   }
@@ -291,6 +320,7 @@ export class Scheduler {
 
     const { job } = entry;
     const now = new Date();
+    const startTime = Date.now();
 
     console.log(`[Scheduler] Running cron job ${jobId}: "${job.name ?? job.message.slice(0, 30)}"`);
 
@@ -307,6 +337,15 @@ export class Scheduler {
         { type: "cron", jobId, timestamp: now.toISOString() }
       );
 
+      // Record successful run
+      const durationMs = Date.now() - startTime;
+      this.consecutiveErrors.set(jobId, 0);
+      this.store?.recordRun(jobId, {
+        status: 'ok',
+        startedAt: now.toISOString(),
+        durationMs,
+      });
+
       // Emit event
       this.emitEvent({
         type: "cron",
@@ -318,7 +357,12 @@ export class Scheduler {
 
       // Notify channel with response
       if (result.notify) {
-        await this.notifier(job.channelTarget, result.text);
+        await this.notifier(job.channelTarget, result.text, {
+          jobId,
+          jobName: job.name,
+          type: job.oneShot ? "reminder" : "cron",
+          sessionId,
+        });
       }
 
       // Remove one-shot jobs after execution
@@ -326,7 +370,28 @@ export class Scheduler {
         this.removeJob(jobId);
       }
     } catch (err) {
-      console.error(`[Scheduler] Cron job ${jobId} error:`, err);
+      const durationMs = Date.now() - startTime;
+      const errorCount = (this.consecutiveErrors.get(jobId) ?? 0) + 1;
+      this.consecutiveErrors.set(jobId, errorCount);
+
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      // Record failed run
+      this.store?.recordRun(jobId, {
+        status: 'error',
+        startedAt: now.toISOString(),
+        durationMs,
+        error: errorMessage,
+      });
+
+      // Determine backoff tier
+      const backoffIndex = Math.min(errorCount - 1, ERROR_BACKOFF_MS.length - 1);
+      const backoffMs = ERROR_BACKOFF_MS[backoffIndex];
+
+      console.warn(
+        `[Scheduler] Cron job ${jobId} error (consecutive: ${errorCount}, ` +
+        `next backoff: ${backoffMs}ms): ${errorMessage}`
+      );
     }
   }
 
@@ -374,6 +439,76 @@ export class Scheduler {
     console.log(`[Scheduler] Scheduled reminder ${id} for ${targetDate.toISOString()}`);
 
     return id;
+  }
+
+  // =========================================================================
+  // Persistence
+  // =========================================================================
+
+  /**
+   * Restore persisted jobs from the CronJobStore.
+   * Called during start() before the heartbeat begins.
+   */
+  private restorePersistedJobs(): void {
+    if (!this.store) return;
+
+    const persisted = this.store.loadAll();
+    let restored = 0;
+
+    for (const pj of persisted) {
+      // Skip one-shot jobs — they are ephemeral by design
+      if (pj.oneShot) continue;
+
+      // Only schedule enabled (non-paused) jobs
+      const relativeTime = parseRelativeTime(pj.schedule);
+
+      // Skip expired relative-time jobs
+      if (relativeTime && relativeTime.getTime() <= Date.now()) continue;
+
+      const scheduledJob = relativeTime
+        ? schedule.scheduleJob(relativeTime, () => this.runCronJob(pj.id))
+        : schedule.scheduleJob(pj.schedule, () => this.runCronJob(pj.id));
+
+      const cronJob: CronJob = {
+        schedule: pj.schedule,
+        message: pj.message,
+        sessionMode: pj.sessionMode,
+        channelTarget: pj.channelTarget,
+        oneShot: pj.oneShot,
+        name: pj.name,
+        id: pj.id,
+        nextRun: scheduledJob.nextInvocation() ?? null,
+        paused: !pj.enabled,
+        createdAt: new Date(pj.createdAt),
+      };
+
+      this.jobs.set(pj.id, { job: cronJob, scheduled: scheduledJob });
+
+      // Track consecutive errors from persisted state
+      if (pj.consecutiveErrors) {
+        this.consecutiveErrors.set(pj.id, pj.consecutiveErrors);
+      }
+
+      // Ensure jobCounter stays above persisted IDs to avoid collisions
+      const match = pj.id.match(/^job-(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num >= this.jobCounter) {
+          this.jobCounter = num;
+        }
+      }
+
+      // If job is paused, cancel the schedule immediately
+      if (!pj.enabled) {
+        scheduledJob.cancel();
+      }
+
+      restored++;
+    }
+
+    if (restored > 0) {
+      console.log(`[Scheduler] Restored ${restored} persisted job(s)`);
+    }
   }
 
   // =========================================================================
