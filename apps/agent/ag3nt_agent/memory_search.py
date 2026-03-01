@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -439,6 +440,8 @@ _STOP_WORDS: frozenset[str] = frozenset({
     "most", "some", "any", "such", "only", "own", "same", "too",
 })
 
+_MAX_EXPANSION_VARIANTS = 15
+
 
 def _expand_query(query: str) -> list[str]:
     """Expand a query into variant forms to improve BM25 recall.
@@ -456,19 +459,24 @@ def _expand_query(query: str) -> list[str]:
         return [query]
 
     # Extract keywords: filter stop words and short tokens
-    tokens = query.lower().split()
+    # Use the same tokenization as BM25Index._tokenize() for consistency
+    tokens = re.findall(r'\b\w+\b', query.lower())
     keywords = [t for t in tokens if t not in _STOP_WORDS and len(t) > 2]
 
     if not keywords:
         return [query]
 
-    # Generate bigrams from keywords
+    # Generate bigrams from keywords (capped to avoid O(n^2) blowup)
     variants: list[str] = [query]
     for i in range(len(keywords)):
         for j in range(i + 1, len(keywords)):
             bigram = f"{keywords[i]} {keywords[j]}"
             if bigram != query.lower():
                 variants.append(bigram)
+            if len(variants) >= _MAX_EXPANSION_VARIANTS:
+                break
+        if len(variants) >= _MAX_EXPANSION_VARIANTS:
+            break
 
     return variants
 
