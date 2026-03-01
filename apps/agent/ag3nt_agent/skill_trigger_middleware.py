@@ -89,25 +89,46 @@ def load_skill_triggers() -> dict[str, list[str]]:
 
 def match_triggers(user_message: str, triggers_map: dict[str, list[str]]) -> list[str]:
     """Match user message against skill triggers.
-    
+
+    Uses a multi-strategy approach:
+    1. Exact substring match (highest confidence)
+    2. All trigger words present in message (word-level match)
+    3. Skill name appears in message (e.g., "run the git-commit skill")
+
     Args:
         user_message: The user's message
         triggers_map: Dictionary mapping skill names to trigger phrases
-        
+
     Returns:
         List of skill names that match the user message
     """
     user_message_lower = user_message.lower()
+    user_words = set(re.split(r'\W+', user_message_lower))
     matched_skills = []
-    
+
     for skill_name, triggers in triggers_map.items():
+        matched = False
+
+        # Strategy 1 & 2: Check each trigger phrase
         for trigger in triggers:
             trigger_lower = trigger.lower()
-            # Simple substring matching (could be enhanced with fuzzy matching)
+            # Exact substring match
             if trigger_lower in user_message_lower:
-                matched_skills.append(skill_name)
-                break  # Only match once per skill
-    
+                matched = True
+                break
+            # Word-level match: all words in trigger appear in message
+            trigger_words = set(re.split(r'\W+', trigger_lower))
+            if trigger_words and trigger_words.issubset(user_words):
+                matched = True
+                break
+
+        # Strategy 3: Skill name appears in message (e.g., "git-commit")
+        if not matched and skill_name.lower() in user_message_lower:
+            matched = True
+
+        if matched:
+            matched_skills.append(skill_name)
+
     return matched_skills
 
 
@@ -127,6 +148,10 @@ class SkillTriggerMiddleware(AgentMiddleware):
                 if self._triggers_map is None:
                     self._triggers_map = load_skill_triggers()
         return self._triggers_map
+
+    def invalidate_triggers(self) -> None:
+        """Invalidate cached triggers, forcing reload on next access."""
+        self._triggers_map = None
     
     def wrap_model_call(
         self,
