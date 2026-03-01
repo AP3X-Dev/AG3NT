@@ -102,6 +102,7 @@ from ag3nt_agent.context_summarization import (
 from ag3nt_agent.interactive_tools import get_interactive_tools
 from ag3nt_agent.identity import IdentityLoader
 from ag3nt_agent.memory_search import search_memory
+from ag3nt_agent.agent_guard_middleware import AgentGuardMiddleware
 from ag3nt_agent.planning_middleware import PlanningMiddleware
 from ag3nt_agent.shell_middleware import ShellMiddleware
 from ag3nt_agent.skill_trigger_middleware import SkillTriggerMiddleware
@@ -169,6 +170,9 @@ _pending_interrupt_ids_lock = threading.Lock()
 
 # Agent pool for pre-warmed instances (optional feature)
 _use_agent_pool: bool = os.environ.get("AG3NT_USE_AGENT_POOL", "false").lower() == "true"
+
+# Model fallback chain singleton (lazy-initialized from env)
+_fallback_chain: "ModelFallbackChain | None" = None
 
 # Set up logging for approval events
 logger = logging.getLogger("ag3nt.approval")
@@ -353,6 +357,29 @@ def _create_model() -> "BaseChatModel | str":
     return create_model()
 
 
+def get_fallback_chain():
+    """Get or create the singleton ModelFallbackChain.
+
+    The chain is built from environment variables on first call and
+    cached for the lifetime of the process.  The primary model (index 0)
+    is the same provider/model that ``_create_model()`` would produce;
+    additional providers are appended based on available API keys.
+
+    Returns:
+        ModelFallbackChain instance.
+    """
+    global _fallback_chain
+    if _fallback_chain is None:
+        from ag3nt_agent.model_fallback import ModelFallbackChain
+        _fallback_chain = ModelFallbackChain.from_env()
+        logger.info(
+            "ModelFallbackChain initialised with %d provider(s): %s",
+            len(_fallback_chain.providers),
+            [p["provider"] for p in _fallback_chain.providers],
+        )
+    return _fallback_chain
+
+
 def _get_global_skills_path() -> Path | None:
     """Get the global skills directory path if it exists.
 
@@ -452,81 +479,110 @@ def _load_mcp_config() -> dict | None:
     return None
 
 
-def _load_mcp_tools() -> list:
+def _sanitize_surrogates(s: str) -> str:
+    """Remove unpaired surrogates that break UTF-8 encoding on Windows."""
+    return s.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _load_mcp_tools() -> tuple[list, dict[str, list[str]]]:
     """Load tools from configured MCP servers.
 
-    Uses langchain-mcp-adapters to connect to MCP servers and convert
-    their tools to LangChain-compatible tools.
+    Uses langchain-mcp-adapters (v0.2+) to connect to MCP servers and
+    convert their tools to LangChain-compatible tools.  Each server is
+    loaded independently so one failure doesn't break the rest.
 
     Returns:
-        List of MCP tools (may be empty if no config or errors)
+        Tuple of (tools_list, server_tool_map) where server_tool_map maps
+        server names to their tool names (e.g. {"context7": ["resolve-library-id", "query-docs"]}).
     """
     import asyncio
 
     config = _load_mcp_config()
     if not config or "mcpServers" not in config:
-        return []
+        return [], {}
 
     servers = config["mcpServers"]
     if not servers:
-        return []
+        return [], {}
 
-    async def _async_load_mcp_tools() -> list:
+    async def _async_load_mcp_tools() -> tuple[list, dict[str, list[str]]]:
         """Async implementation of MCP tool loading."""
         try:
             from langchain_mcp_adapters.client import MultiServerMCPClient
-        except ImportError:
+        except ImportError as exc:
             logger.warning(
-                "langchain-mcp-adapters not installed. MCP tools unavailable. "
-                "Install with: pip install langchain-mcp-adapters"
+                "langchain-mcp-adapters failed to import. MCP tools unavailable. "
+                "Install with: pip install langchain-mcp-adapters langgraph  "
+                "Error: %s", exc
             )
-            return []
+            return [], {}
 
-        try:
-            # Convert config to MultiServerMCPClient format
-            # The library expects: {"server_name": {"command": ..., "args": ..., "env": ...}}
-            server_params = {}
-            for name, server_config in servers.items():
-                # Allow UI/config tools to mark servers as disabled without removing them.
-                if isinstance(server_config, dict) and server_config.get("enabled") is False:
-                    logger.info("Skipping disabled MCP server: %s", name)
-                    continue
-                server_params[name] = {
-                    "command": server_config.get("command"),
-                    "args": server_config.get("args", []),
-                    "env": server_config.get("env"),
-                }
+        # Build params — v0.2+ requires explicit "transport" key.
+        server_params = {}
+        for name, server_config in servers.items():
+            if isinstance(server_config, dict) and server_config.get("enabled") is False:
+                logger.info("Skipping disabled MCP server: %s", name)
+                continue
 
-            logger.info(f"Connecting to {len(server_params)} MCP server(s): {list(server_params.keys())}")
+            transport = server_config.get("transport", "stdio")
+            params: dict = {"transport": transport}
 
-            async with MultiServerMCPClient(server_params) as mcp_client:
-                mcp_tools = mcp_client.get_tools()
-                logger.info(f"Loaded {len(mcp_tools)} tool(s) from MCP servers")
-                for tool in mcp_tools:
-                    logger.debug(f"  - {tool.name}: {tool.description[:50] if tool.description else 'No description'}...")
-                return mcp_tools
+            if transport == "stdio":
+                params["command"] = server_config.get("command")
+                params["args"] = server_config.get("args", [])
+                if server_config.get("env"):
+                    params["env"] = server_config["env"]
+            else:
+                # HTTP / SSE / WebSocket transports
+                if server_config.get("url"):
+                    params["url"] = server_config["url"]
+                if server_config.get("headers"):
+                    params["headers"] = server_config["headers"]
 
-        except Exception as e:
-            logger.error(f"Failed to load MCP tools: {e}")
-            return []
+            server_params[name] = params
+
+        if not server_params:
+            return [], {}
+
+        logger.info(f"Connecting to {len(server_params)} MCP server(s): {list(server_params.keys())}")
+
+        # Load each server independently so one failure doesn't kill the rest.
+        all_tools: list = []
+        server_tool_map: dict[str, list[str]] = {}
+        for srv_name, srv_params in server_params.items():
+            try:
+                client = MultiServerMCPClient({srv_name: srv_params})
+                tools = await client.get_tools()
+                logger.info(f"MCP server '{srv_name}': loaded {len(tools)} tool(s)")
+                tool_names = []
+                for tool in tools:
+                    # Sanitize descriptions to strip surrogates from Windows subprocess output
+                    if tool.description:
+                        tool.description = _sanitize_surrogates(tool.description)
+                    tool_names.append(tool.name)
+                all_tools.extend(tools)
+                server_tool_map[srv_name] = tool_names
+            except Exception as e:
+                logger.error(f"MCP server '{srv_name}' failed to load: {e}")
+
+        logger.info(f"Total MCP tools loaded: {len(all_tools)}")
+        return all_tools, server_tool_map
 
     # Run async function synchronously
     try:
-        # Check if we're already in an event loop
         try:
-            loop = asyncio.get_running_loop()
-            # We're in an async context, can't use asyncio.run
-            # This shouldn't happen during agent build, but handle it
+            asyncio.get_running_loop()
+            # Already in an async context — run in a thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, _async_load_mcp_tools())
-                return future.result(timeout=30)
+                return future.result(timeout=60)
         except RuntimeError:
-            # No running loop, we can use asyncio.run
+            # No running loop
             return asyncio.run(_async_load_mcp_tools())
     except Exception as e:
         logger.error(f"Error loading MCP tools: {e}")
-        return []
+        return [], {}
 
 
 # Import the enhanced web search function from web_search module
@@ -708,8 +764,13 @@ def schedule_reminder(
         return {"success": False, "error": f"Failed to schedule reminder: {e}"}
 
 
-def _create_subagents() -> list[dict]:
+def _create_subagents(mcp_tools: list | None = None) -> list[dict]:
     """Create the sub-agent specifications using SubagentRegistry.
+
+    Args:
+        mcp_tools: Optional list of MCP tools to inject into sub-agents.
+            These are added to sub-agents that use research/general tools
+            (researcher, analyst, etc.) so they can use MCP servers like Context7.
 
     Returns:
         List of SubAgent dicts for all registered subagents.
@@ -809,6 +870,16 @@ def _create_subagents() -> list[dict]:
     except ImportError:
         pass
 
+    # Add MCP tools to the tool map so sub-agents can access them
+    if mcp_tools:
+        for tool in mcp_tools:
+            tool_name = getattr(tool, "name", None)
+            if tool_name:
+                tool_map[tool_name] = tool
+
+    # Sub-agents that should receive MCP tools (research-oriented agents)
+    _mcp_subagents = {"researcher", "analyst", "coder", "planner", "writer"}
+
     subagents = []
     for config in registry.list_all():
         # Convert tool names to actual tool functions
@@ -829,6 +900,14 @@ def _create_subagents() -> list[dict]:
         # If any tool was None (default tool), use empty list to get default tools
         if uses_default_tools and not tools:
             tools = []  # Empty = default tools from DeepAgents
+
+        # Inject MCP tools into research-oriented sub-agents so they can use
+        # MCP servers (e.g. Context7 for documentation lookup)
+        if mcp_tools and config.name in _mcp_subagents:
+            existing_names = {getattr(t, "name", None) for t in tools}
+            for mcp_tool in mcp_tools:
+                if getattr(mcp_tool, "name", None) not in existing_names:
+                    tools.append(mcp_tool)
 
         subagent_dict = {
             "name": config.name,
@@ -925,12 +1004,12 @@ def _build_backend(repo_root: Path):
     user_data_backend = FilesystemBackend(root_dir=user_data_path, virtual_mode=False)
     routes["/user-data/"] = user_data_backend
 
-    # Route for workspace at ~/.ag3nt/workspace/ (agent's working directory)
-    # NOTE: virtual_mode=True is required so paths like /RE/scripts.md (after stripping
-    # /workspace/ prefix) are resolved relative to workspace_path, not as absolute paths.
+    # Route for workspace at ~/.ag3nt/workspace/ (agent's default working directory)
+    # virtual_mode=False: relative paths resolve under workspace_path,
+    # absolute paths access the real filesystem directly.
     workspace_path = user_data_path / "workspace"
     workspace_path.mkdir(exist_ok=True)
-    workspace_backend = FilesystemBackend(root_dir=workspace_path, virtual_mode=True)
+    workspace_backend = FilesystemBackend(root_dir=workspace_path, virtual_mode=False)
     routes["/workspace/"] = workspace_backend
 
     # Route for global skills at ~/.ag3nt/skills/ (if exists)
@@ -965,33 +1044,14 @@ Examples:
 - To create a file: `/workspace/my_project/file.txt`
 - To read a skill: `/skills/example-skill/SKILL.md`
 
-### Accessing External Paths
+### Accessing Files Anywhere
 
-If the user asks you to access files **outside the workspace** (e.g., their Downloads folder,
-another project directory, or system paths like `C:\\Users\\...` on Windows):
+You have full filesystem access. You can read, write, and manage files anywhere on the user's system.
+Use absolute paths directly — no special permissions needed.
 
-1. Use the `request_external_access` tool FIRST to request permission
-2. Wait for user approval
-3. Once approved, you can use normal file tools on that path
-
-Example workflow:
-```
-User: "Can you read the file at C:\\Users\\Me\\Downloads\\data.csv?"
-
-# Step 1: Request access
-request_external_access(
-    path="C:\\Users\\Me\\Downloads\\data.csv",
-    operation="read",
-    reason="User asked to analyze this CSV file"
-)
-
-# Step 2: User approves via HITL
-
-# Step 3: Now you can read it
-read_file(path="C:\\Users\\Me\\Downloads\\data.csv")
-```
-
-The approval is cached per directory, so you won't need to ask again for other files in the same folder.
+- Use `/workspace/` paths for new files you create (your default working directory)
+- Use absolute paths (e.g., `C:\\Users\\...`) when the user references files elsewhere
+- You can move, copy, or create files in any location the user asks for
 
 ## File Editing
 
@@ -1291,19 +1351,30 @@ This safety net means you can take risks confidently -- any change can be rolled
 
 ## Browser Control
 
-You have web automation capabilities through browser tools that operate in two modes:
+You have web automation capabilities through browser tools. You CAN open and view any web page — local files and remote URLs alike.
 
-**Live mode** (user can watch in Agent Browser UI):
-- `browser_start_session(url)` - Start a live browser session and navigate to a URL.
+**Opening pages for the user to see:**
+- `browser_start_session(url)` - Opens the URL in the platform's built-in Agent Browser so the user can watch live. Use this for demos, previews, and showing your work.
+- Supports `file:///` URLs for local HTML files (e.g., `browser_start_session("file:///C:/Users/name/project/index.html")`)
+- Supports `http://` and `https://` for remote pages
 
-**All browser tools** (work in both live and headless mode):
+**Taking screenshots (displayed inline in chat):**
+- `browser_screenshot()` - Captures the current page and displays the image directly in the chat. Always use this after navigating to show the user what the page looks like.
+- `browser_screenshot(full_page=True)` - Captures the entire scrollable page
+- Screenshots are saved automatically and shown as images in the conversation.
+
+**Other browser tools** (work in both live and headless mode):
 - `browser_navigate(url)` - Navigate to a URL
-- `browser_screenshot(full_page, save_path)` - Capture screenshots
 - `browser_click(selector)` - Click elements (CSS selectors or text="...")
 - `browser_fill(selector, text)` - Fill form fields
 - `browser_get_content(selector)` - Extract text from page or element
 - `browser_wait_for(selector, state)` - Wait for elements to appear/disappear
 - `browser_close()` - Close browser when done
+
+**Workflow for previewing your work:**
+1. `browser_start_session("file:///path/to/index.html")` — opens in Agent Browser
+2. `browser_screenshot()` — captures and displays in chat so the user sees it
+3. `browser_close()` — clean up when done
 
 Always call `browser_close()` when done to free resources.
 
@@ -1559,6 +1630,10 @@ def _build_agent() -> CompiledStateGraph:
 
     model = _create_model()
 
+    # Initialise the fallback chain alongside the primary model so it's
+    # ready for error-recovery use without paying extra startup cost later.
+    get_fallback_chain()
+
     # Get repo root for skill discovery and file operations
     repo_root = _get_repo_root()
 
@@ -1571,24 +1646,31 @@ def _build_agent() -> CompiledStateGraph:
     # Get memory sources (AGENTS.md, MEMORY.md)
     memory_sources = _get_memory_sources()
 
-    # Create sub-agents (Researcher, Coder)
-    subagents = _create_subagents()
+    # Load MCP tools early so sub-agents can also use them
+    mcp_tools, mcp_server_tool_map = _load_mcp_tools()
+
+    # Create sub-agents (Researcher, Coder) — pass MCP tools so they're available
+    subagents = _create_subagents(mcp_tools=mcp_tools)
 
     # Get interrupt_on configuration for risky tools
     interrupt_on = _get_interrupt_on_config()
 
-    # Persistent checkpoints via SqliteSaver (survives daemon restarts).
-    # Falls back to MemorySaver if langgraph-checkpoint-sqlite is not installed.
+    # Persistent checkpoints via AsyncSqliteSaver (survives daemon restarts).
+    # Falls back to MemorySaver if aiosqlite is not installed.
     try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
         db_path = _get_user_data_path() / "checkpoints.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        checkpointer = SqliteSaver.from_conn_string(str(db_path))
-        logger.info("Using SqliteSaver checkpointer at %s", db_path)
+        # aiosqlite.connect() is sync — returns a lazy Connection proxy.
+        # The actual sqlite connection opens on first async use.
+        conn = aiosqlite.connect(str(db_path))
+        checkpointer = AsyncSqliteSaver(conn)
+        logger.info("Using AsyncSqliteSaver checkpointer at %s", db_path)
     except (ImportError, Exception) as exc:
         checkpointer = MemorySaver()
-        logger.info("Using MemorySaver checkpointer (SqliteSaver unavailable: %s)", exc)
+        logger.info("Using MemorySaver checkpointer (AsyncSqliteSaver unavailable: %s)", exc)
 
     # Create shell middleware for command execution
     # Uses ~/.ag3nt/workspace/ as the working directory
@@ -1598,6 +1680,7 @@ def _build_agent() -> CompiledStateGraph:
         workspace_root=str(workspace_path),
         timeout=60.0,  # 60 second timeout
         max_output_bytes=100_000,  # 100KB output limit
+        enable_path_sandbox=False,  # Allow full filesystem access
     )
 
     # Start file watcher for external change detection
@@ -1621,13 +1704,13 @@ def _build_agent() -> CompiledStateGraph:
     except ImportError:
         logger.debug("watchdog not installed — file watcher disabled")
 
-    # Initialize path protection for external directory access control
+    # Initialize path protection (unrestricted — agent can access any path)
     path_protection_middleware = None
     try:
         from ag3nt_agent.tool_policy import PathProtection, PathProtectionMiddleware
-        path_protection = PathProtection.get_instance(str(workspace_path))
+        path_protection = PathProtection.get_instance()  # No workspace root = unrestricted
         path_protection_middleware = PathProtectionMiddleware(path_protection)
-        logger.info("Path protection initialized for workspace")
+        logger.info("Path protection initialized (unrestricted filesystem access)")
     except ImportError:
         pass
 
@@ -1641,20 +1724,19 @@ def _build_agent() -> CompiledStateGraph:
     except Exception as e:
         logger.debug(f"LSP manager initialization failed: {e}")
 
-    # Create summarization middleware for context auto-summarization
-    # This offloads full history to backend before summarizing to prevent context overflow
+    # Create summarization monitor middleware for observability
+    # In DeepAgents 0.4.x, create_deep_agent auto-creates SummarizationMiddleware;
+    # we only add a monitor that runs after it to record metrics.
     summarization_config = get_default_summarization_config()
-    summarization_middleware = create_summarization_middleware(
+    summarization_monitor_mw = create_summarization_middleware(
         config=summarization_config,
-        backend=backend,
     )
-    if summarization_middleware:
+    if summarization_monitor_mw:
         logger.info(
-            f"Summarization middleware enabled: trigger={summarization_config.trigger.description}"
+            f"Summarization monitor enabled: trigger={summarization_config.trigger.description}"
         )
 
-    # Load MCP tools from configured servers
-    mcp_tools = _load_mcp_tools()
+    # MCP tools already loaded above (before sub-agent creation)
 
     # Load tool policy (if available) — used to skip denied tools before importing
     tool_policy = None
@@ -1675,20 +1757,68 @@ def _build_agent() -> CompiledStateGraph:
     from ag3nt_agent.browser_tool import get_browser_tools
     browser_tools = get_browser_tools()
 
-    all_tools = [internet_search, fetch_url, schedule_reminder] + browser_tools + mcp_tools + registry_tools + interactive_tools
+    # Deduplicate: if an MCP tool has the same name as a built-in, prefer the MCP version.
+    builtin_tools = [internet_search, fetch_url, schedule_reminder] + browser_tools + registry_tools + interactive_tools
+    builtin_names = {getattr(t, "name", None) for t in builtin_tools}
+    mcp_names = {getattr(t, "name", None) for t in mcp_tools}
+    dupes = builtin_names & mcp_names - {None}
+    if dupes:
+        logger.info(f"MCP tools override {len(dupes)} built-in tool(s): {dupes}")
+        builtin_tools = [t for t in builtin_tools if getattr(t, "name", None) not in dupes]
+    all_tools = builtin_tools + mcp_tools
     if mcp_tools:
-        logger.info(f"Agent initialized with {len(mcp_tools)} MCP tool(s)")
+        mcp_tool_names = [getattr(t, "name", "?") for t in mcp_tools]
+        logger.info(f"Agent initialized with {len(mcp_tools)} MCP tool(s): {mcp_tool_names}")
 
-    # Apply tool policy filter to remaining tools (built-ins + interactive)
+    # Apply tool policy filter — exempt MCP tools (user-configured integrations)
     if tool_policy is not None:
-        all_tools = tool_policy.filter_tools(all_tools)
+        mcp_exempt = {getattr(t, "name", None) for t in mcp_tools} - {None}
+        before_count = len(all_tools)
+        all_tools = tool_policy.filter_tools(all_tools, exempt=mcp_exempt)
+        if len(all_tools) < before_count:
+            dropped = before_count - len(all_tools)
+            logger.warning(f"Tool policy dropped {dropped} tool(s): {before_count} -> {len(all_tools)}")
         logger.info(f"Tool policy applied: {len(all_tools)} tools available")
 
     # Wrap cacheable tools with result caching and write-invalidation
     all_tools = _wrap_tools_with_cache(all_tools)
 
+    # Log final tool list for debugging
+    all_tool_names = [getattr(t, "name", "?") for t in all_tools]
+    logger.info(f"Final tool list ({len(all_tools)}): {all_tool_names}")
+
     # System prompt — uses shared function for consistency with UI agent
     system_prompt = _get_system_prompt()
+
+    # Append dynamic MCP tools section so the agent knows what MCP tools are available
+    if mcp_tools and mcp_server_tool_map:
+        mcp_config = _load_mcp_config() or {}
+        mcp_servers_cfg = mcp_config.get("mcpServers", {})
+        mcp_section = "\n\n## MCP Tools (External Integrations)\n\n"
+        mcp_section += "You have tools loaded from external MCP servers. "
+        mcp_section += "When the user refers to an MCP server by name, use the corresponding tools:\n\n"
+        for srv_name, tool_names in mcp_server_tool_map.items():
+            srv_cfg = mcp_servers_cfg.get(srv_name, {})
+            display_name = srv_cfg.get("name", srv_name) if isinstance(srv_cfg, dict) else srv_name
+            desc = srv_cfg.get("description", "") if isinstance(srv_cfg, dict) else ""
+            mcp_section += f"**{display_name}** (server: `{srv_name}`)"
+            if desc:
+                mcp_section += f" — {desc}"
+            mcp_section += "\n"
+            for tn in tool_names:
+                mcp_section += f"  - `{tn}`\n"
+            mcp_section += "\n"
+        mcp_section += (
+            "IMPORTANT: When the user says 'use context7' or 'use playwright', you MUST call the "
+            "corresponding MCP tools DIRECTLY yourself. Do NOT delegate MCP tool calls to sub-agents "
+            "via the task tool — call `resolve-library-id` and `query-docs` (or other MCP tools) directly. "
+            "MCP tools are available to you as regular tools alongside internet_search, fetch_url, etc.\n"
+        )
+        system_prompt += mcp_section
+
+    # Strip any unpaired surrogates from the full system prompt (Windows subprocess
+    # output, file reads, and MCP tool descriptions can introduce them).
+    system_prompt = _sanitize_surrogates(system_prompt)
 
     # Build middleware list
     # Note: create_deep_agent already adds TodoListMiddleware internally
@@ -1699,7 +1829,9 @@ def _build_agent() -> CompiledStateGraph:
     )
     planning_middleware = PlanningMiddleware(yolo_mode=_is_yolo_mode())
     skill_trigger_middleware = SkillTriggerMiddleware(planning_middleware=planning_middleware)
+    agent_guard = AgentGuardMiddleware()
     middleware_list = [
+        agent_guard,              # Doom loop + steps limit + output truncation
         turn_context_middleware,  # Identity + memory context (runs every turn)
         planning_middleware,  # Plan mode enforcement
         shell_middleware,  # Shell execution capability
@@ -1732,6 +1864,10 @@ def _build_agent() -> CompiledStateGraph:
     if safety_hook_middleware:
         middleware_list.append(safety_hook_middleware)
 
+    # Add summarization monitor (runs after upstream SummarizationMiddleware)
+    if summarization_monitor_mw:
+        middleware_list.append(summarization_monitor_mw)
+
     agent = create_deep_agent(
         model=model,
         system_prompt=system_prompt,
@@ -1743,9 +1879,6 @@ def _build_agent() -> CompiledStateGraph:
         backend=backend,
         interrupt_on=interrupt_on if interrupt_on else None,
         checkpointer=checkpointer,
-        # Use AG3NT's MonitoredSummarizationMiddleware instead of the default
-        # This provides monitoring/metrics for summarization events
-        summarization_middleware=summarization_middleware,
     )
     return agent
 
@@ -2005,7 +2138,18 @@ def _maybe_compact_history(
     This is intentionally a no-op when the ``compaction_middleware`` module
     is unavailable or when any step raises an exception — the agent should
     never fail because of compaction bookkeeping.
+
+    NOTE: When SummarizationMiddleware is active (the default), this function
+    is skipped to avoid dual compaction that strips too much context.
+    Summarization already handles context window management at the
+    middleware layer (before_model hook).
     """
+    # Skip compaction when summarization middleware is already managing context.
+    # Dual compaction causes premature context loss during file-heavy tasks.
+    summarization_config = get_default_summarization_config()
+    if summarization_config.enabled:
+        return
+
     try:
         from ag3nt_agent.compaction_middleware import get_compaction_middleware
 
@@ -2055,6 +2199,9 @@ def run_turn(
             - interrupt: Dict with interrupt details (if paused for approval)
     """
     agent = get_agent()
+
+    # Reset guard step counter for this turn
+    AgentGuardMiddleware.reset_steps(session_id)
 
     # Set session context for deep reasoning tool
     try:
