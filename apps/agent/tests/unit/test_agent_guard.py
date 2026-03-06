@@ -227,6 +227,25 @@ class TestOutputTruncation:
         result = AgentGuardMiddleware._maybe_truncate_result(msg)
         assert result.content == ""
 
+    @patch("ag3nt_agent.artifact_store.get_artifact_store")
+    def test_auto_dump_to_artifact(self, mock_get_store):
+        """Large output auto-dumps to artifact store and returns preview + reference."""
+        mock_store = MagicMock()
+        mock_meta = MagicMock()
+        mock_meta.size_bytes = 50000
+        mock_meta.artifact_id = "abc123"
+        mock_store.write_artifact.return_value = mock_meta
+        mock_get_store.return_value = mock_store
+
+        large_content = "x" * 5000
+        msg = ToolMessage(content=large_content, tool_call_id="1")
+        result = AgentGuardMiddleware._maybe_truncate_result(msg)
+
+        mock_store.write_artifact.assert_called_once()
+        assert "abc123" in result.content
+        assert "read_artifact" in result.content
+        assert result.content.startswith("x" * 100)  # preview preserved
+
 
 # ---------------------------------------------------------------------------
 # Integration: doom loop + steps in _guard_model_call
