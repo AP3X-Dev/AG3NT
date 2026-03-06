@@ -30,7 +30,11 @@ from ag3nt_agent.context_tools import (
     read_artifact,
     check_context_budget,
     compact_now,
+    write_note,
+    read_note,
+    list_notes,
     get_context_tools,
+    _set_notes_dir,
 )
 
 
@@ -93,11 +97,14 @@ class TestGetContextTools:
     def test_returns_all_tools(self):
         tools = get_context_tools()
         assert isinstance(tools, list)
-        assert len(tools) == 4
+        assert len(tools) == 7
         assert dump_to_artifact in tools
         assert read_artifact in tools
         assert check_context_budget in tools
         assert compact_now in tools
+        assert write_note in tools
+        assert read_note in tools
+        assert list_notes in tools
 
 
 class TestCheckContextBudget:
@@ -142,3 +149,50 @@ class TestCompactNow:
         with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=None):
             result = compact_now.invoke({})
         assert "not available" in result.lower()
+
+
+import shutil
+import tempfile
+
+
+class TestScratchpadNotes:
+    def setup_method(self):
+        self.tmpdir = tempfile.mkdtemp()
+        _set_notes_dir(self.tmpdir)
+
+    def teardown_method(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_write_and_read_note(self):
+        write_result = write_note.invoke({"key": "findings", "content": "Found a bug in auth"})
+        assert "saved" in write_result.lower()
+
+        read_result = read_note.invoke({"key": "findings"})
+        assert "Found a bug in auth" in read_result
+
+    def test_read_nonexistent_note(self):
+        result = read_note.invoke({"key": "nonexistent"})
+        assert "not found" in result.lower()
+
+    def test_list_notes_empty(self):
+        result = list_notes.invoke({})
+        assert "no notes" in result.lower()
+
+    def test_list_notes_shows_keys(self):
+        write_note.invoke({"key": "alpha", "content": "first"})
+        write_note.invoke({"key": "beta", "content": "second"})
+        result = list_notes.invoke({})
+        assert "alpha" in result
+        assert "beta" in result
+
+    def test_write_overwrites_existing(self):
+        write_note.invoke({"key": "test", "content": "version 1"})
+        write_note.invoke({"key": "test", "content": "version 2"})
+        result = read_note.invoke({"key": "test"})
+        assert "version 2" in result
+        assert "version 1" not in result
+
+    def test_key_sanitized(self):
+        write_note.invoke({"key": "my/dangerous/../key", "content": "safe"})
+        result = read_note.invoke({"key": "my/dangerous/../key"})
+        assert "safe" in result

@@ -4,10 +4,13 @@ Provides:
 - dump_to_artifact / read_artifact — offload large content to the ArtifactStore.
 - check_context_budget — query current context-window usage ratio.
 - compact_now — request immediate context compaction.
+- write_note / read_note / list_notes — persistent scratchpad notes.
 """
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 
 from langchain_core.tools import tool
 
@@ -134,6 +137,73 @@ def compact_now() -> str:
     return "Compaction requested. Will apply at next opportunity."
 
 
+_NOTES_DIR = Path.home() / ".ag3nt" / "notes"
+
+
+def _set_notes_dir(path: str) -> None:
+    """Override notes directory (for testing)."""
+    global _NOTES_DIR
+    _NOTES_DIR = Path(path)
+
+
+def _sanitize_key(key: str) -> str:
+    """Sanitize note key to prevent path traversal."""
+    safe = re.sub(r"[/\\]", "-", key)
+    safe = safe.replace("..", "")
+    safe = safe.strip("-. ")
+    return safe or "unnamed"
+
+
+@tool
+def write_note(key: str, content: str) -> str:
+    """Write a note to your scratchpad.
+
+    Notes persist in ~/.ag3nt/notes/ and are available across sessions.
+    Use for tracking decisions, recording findings, or planning next steps.
+
+    Args:
+        key: Short identifier (e.g., "research-findings", "next-steps")
+        content: The note content (markdown supported)
+    """
+    _NOTES_DIR.mkdir(parents=True, exist_ok=True)
+    safe_key = _sanitize_key(key)
+    path = _NOTES_DIR / f"{safe_key}.md"
+    path.write_text(content, encoding="utf-8")
+    return f"Note '{safe_key}' saved ({len(content)} chars)."
+
+
+@tool
+def read_note(key: str) -> str:
+    """Read a note from your scratchpad.
+
+    Args:
+        key: The note identifier used when writing
+    """
+    safe_key = _sanitize_key(key)
+    path = _NOTES_DIR / f"{safe_key}.md"
+    if not path.exists():
+        return f"Note '{safe_key}' not found."
+    return path.read_text(encoding="utf-8")
+
+
+@tool
+def list_notes() -> str:
+    """List all notes in your scratchpad."""
+    if not _NOTES_DIR.exists():
+        return "No notes found."
+
+    notes = sorted(_NOTES_DIR.glob("*.md"))
+    if not notes:
+        return "No notes found."
+
+    lines = [f"- {p.stem}" for p in notes]
+    return "Notes:\n" + "\n".join(lines)
+
+
 def get_context_tools() -> list:
     """Factory function for the tool registry."""
-    return [dump_to_artifact, read_artifact, check_context_budget, compact_now]
+    return [
+        dump_to_artifact, read_artifact,
+        check_context_budget, compact_now,
+        write_note, read_note, list_notes,
+    ]
