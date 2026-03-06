@@ -21,7 +21,7 @@ jobs:
     
     steps:
       - name: "📥 Download Gateway Coverage"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: gateway-coverage
           path: gateway-coverage
@@ -30,7 +30,7 @@ jobs:
         continue-on-error: true
 
       - name: "📥 Download Agent Coverage"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: agent-coverage
           path: agent-coverage
