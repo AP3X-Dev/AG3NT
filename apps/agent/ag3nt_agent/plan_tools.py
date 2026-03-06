@@ -75,6 +75,7 @@ class PlanState:
     PLAN_MODE_TOOLS: frozenset[str] = frozenset({
         "plan_enter",
         "plan_exit",
+        "plan_revise",
         "checkpoint",
         "list_plans",
         "resume_plan",
@@ -613,6 +614,76 @@ def resume_plan(plan_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Plan revision
+# ---------------------------------------------------------------------------
+
+@tool
+def plan_revise(
+    reason: str,
+    runtime: Any = None,
+) -> str:
+    """Pause the current plan and enter revision mode.
+
+    Use this when you discover the plan needs changes during execution —
+    new steps needed, steps should be reordered, or the approach has changed.
+    After revising, the plan must be re-approved before execution resumes.
+
+    Args:
+        reason: Why the plan needs revision.
+        runtime: Injected by LangChain.
+    """
+    thread_id = _get_thread_id(runtime)
+    PlanState.set_current(thread_id)
+    session = PlanState.get(thread_id)
+
+    if session.active_plan is None:
+        return "No active plan to revise. Use plan_enter() to create one."
+
+    plan_path = session.active_plan
+    if not plan_path.exists():
+        return f"Plan file missing: {plan_path}"
+
+    # Switch to revision mode
+    session.plan_mode = True
+    session.plan_mode_type = session.plan_mode_type or "feature"
+
+    # Update status in the plan file
+    content = plan_path.read_text(encoding="utf-8")
+    content = re.sub(
+        r"\*\*Status:\*\*\s*.*",
+        "**Status:** REVISING",
+        content,
+        count=1,
+    )
+    # Append revision note
+    revision_note = (
+        f"\n---\n\n"
+        f"## Revision ({datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')})\n\n"
+        f"**Reason:** {reason}\n\n"
+    )
+    content += revision_note
+    plan_path.write_text(content, encoding="utf-8")
+
+    logger.info("Plan revision started: %s (reason: %s)", plan_path, reason)
+
+    _emit_plan_event(
+        "plan_revision_started",
+        {
+            "plan_path": str(plan_path),
+            "reason": reason,
+        },
+        runtime=runtime,
+    )
+
+    return (
+        f"Plan revision mode activated for: {plan_path.name}\n"
+        f"Reason: {reason}\n\n"
+        "You can now edit the plan. Completed steps remain marked.\n"
+        "When done revising, call plan_exit() to submit for re-approval."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -622,4 +693,4 @@ def get_plan_tools() -> list:
     Returns:
         List of @tool decorated plan functions.
     """
-    return [plan_enter, plan_exit, checkpoint, list_plans, resume_plan]
+    return [plan_enter, plan_exit, checkpoint, list_plans, resume_plan, plan_revise]
