@@ -27,40 +27,48 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from langchain_core.callbacks import dispatch_custom_event
 from langchain_core.tools import tool
+
+try:
+    from langchain.tools import ToolRuntime
+except ImportError:
+    ToolRuntime = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("ag3nt.tools.plan")
 
 
 # ---------------------------------------------------------------------------
-# Plan state (class-level singleton)
+# Plan state (thread-safe, keyed by thread_id)
 # ---------------------------------------------------------------------------
 
-class PlanState:
-    """Class-level state tracking the active plan.
-
-    All attributes are class variables so that any module can import
-    ``PlanState`` and inspect the current planning state without needing
-    a shared instance.
-
-    Attributes:
-        active_plan: Absolute ``Path`` to the current plan file, or ``None``.
-        plan_mode: ``True`` when the agent is inside an active planning session.
-        plan_mode_type: ``"feature"`` (lightweight) or ``"project"`` (full PRP).
-        original_request: The user's original message that triggered plan mode.
-        PLAN_MODE_TOOLS: ``frozenset`` of tool names the agent is allowed to
-            invoke while in plan mode.
-    """
+@dataclass
+class _SessionPlanState:
+    """Per-session plan state."""
 
     active_plan: Path | None = None
     plan_mode: bool = False
     plan_mode_type: Literal["feature", "project"] | None = None
     original_request: str = ""
+
+
+class PlanState:
+    """Thread-safe plan state manager keyed by thread_id.
+
+    Provides both a per-session API (``get(thread_id)``) and backward-
+    compatible class-level accessors for code that doesn't know the
+    thread_id.  The class-level properties delegate to a ``_current``
+    context variable set by the tools at call time.
+
+    Attributes:
+        PLAN_MODE_TOOLS: ``frozenset`` of tool names the agent is allowed to
+            invoke while in plan mode.
+    """
 
     # Tools the agent may use during planning (everything else is blocked
     # by the plan-mode guard middleware).
@@ -68,6 +76,8 @@ class PlanState:
         "plan_enter",
         "plan_exit",
         "checkpoint",
+        "list_plans",
+        "resume_plan",
         "read_todos",
         "write_todos",
         "update_todo",
@@ -75,23 +85,100 @@ class PlanState:
         "grep",
         "glob",
         "codebase_search",
-        "exec_command",
         "deep_reasoning",
         "memory_search",
+        "memory_recall",
+        "web_search",
+        "webfetch",
+        "question",
     })
 
+    _lock = threading.Lock()
+    _sessions: dict[str, _SessionPlanState] = {}
+    # Fallback for code that doesn't pass thread_id
+    _current_thread_id: str | None = None
+
     @classmethod
-    def reset(cls) -> None:
-        """Reset all state back to defaults (useful for tests)."""
-        cls.active_plan = None
-        cls.plan_mode = False
-        cls.plan_mode_type = None
-        cls.original_request = ""
+    def get(cls, thread_id: str) -> _SessionPlanState:
+        """Get or create plan state for a session."""
+        with cls._lock:
+            if thread_id not in cls._sessions:
+                cls._sessions[thread_id] = _SessionPlanState()
+            return cls._sessions[thread_id]
+
+    @classmethod
+    def set_current(cls, thread_id: str) -> None:
+        """Set the current thread context (called by tools on entry)."""
+        cls._current_thread_id = thread_id
+
+    @classmethod
+    def _current(cls) -> _SessionPlanState:
+        """Get the current session's state (fallback: first active or empty)."""
+        tid = cls._current_thread_id
+        if tid and tid in cls._sessions:
+            return cls._sessions[tid]
+        # Fallback: find any active session
+        with cls._lock:
+            for s in cls._sessions.values():
+                if s.plan_mode:
+                    return s
+        return _SessionPlanState()
+
+    # Backward-compatible class-level accessors
+    @classmethod
+    @property
+    def active_plan(cls) -> Path | None:  # type: ignore[override]
+        return cls._current().active_plan
+
+    @classmethod
+    @property
+    def plan_mode(cls) -> bool:  # type: ignore[override]
+        return cls._current().plan_mode
+
+    @classmethod
+    @property
+    def plan_mode_type(cls) -> Literal["feature", "project"] | None:  # type: ignore[override]
+        return cls._current().plan_mode_type
+
+    @classmethod
+    @property
+    def original_request(cls) -> str:  # type: ignore[override]
+        return cls._current().original_request
+
+    @classmethod
+    def reset(cls, thread_id: str | None = None) -> None:
+        """Reset state for a session, or all sessions if thread_id is None."""
+        with cls._lock:
+            if thread_id:
+                cls._sessions.pop(thread_id, None)
+            else:
+                cls._sessions.clear()
+            cls._current_thread_id = None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _emit_plan_event(
+    event_type: str,
+    data: dict,
+    runtime: Any = None,
+) -> None:
+    """Emit a plan lifecycle event via stream_writer (custom stream mode).
+
+    Falls back silently if no runtime/stream_writer is available (e.g. in tests).
+    """
+    payload = {"type": event_type, **data}
+    writer = getattr(runtime, "stream_writer", None) if runtime else None
+    if writer is not None:
+        try:
+            writer(payload)
+        except Exception as exc:
+            logger.debug("stream_writer failed for %s: %s", event_type, exc)
+    else:
+        logger.debug("No stream_writer available; %s event not emitted", event_type)
+
 
 def _get_plans_dir() -> Path:
     """Return ``~/.ag3nt/plans/``, creating it if necessary."""
@@ -201,6 +288,15 @@ _PROJECT_TEMPLATE = """\
 """
 
 
+def _get_thread_id(runtime: Any) -> str:
+    """Extract thread_id from a ToolRuntime, falling back to 'default'."""
+    if runtime is None:
+        return "default"
+    config = getattr(runtime, "config", None) or {}
+    configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+    return configurable.get("thread_id", "default")
+
+
 # ---------------------------------------------------------------------------
 # @tool functions
 # ---------------------------------------------------------------------------
@@ -209,6 +305,7 @@ _PROJECT_TEMPLATE = """\
 def plan_enter(
     title: str,
     mode: str = "feature",
+    runtime: Any = None,
 ) -> str:
     """Create a new structured plan and enter planning mode.
 
@@ -221,13 +318,19 @@ def plan_enter(
         title: Short descriptive title for the plan.
         mode: Template to use -- ``"feature"`` (default, lightweight)
               or ``"project"`` (full PRP with checkpoints).
+        runtime: Injected by LangChain -- provides ``stream_writer``
+                 for emitting custom events to the LangGraph stream.
 
     Returns:
         Confirmation message with the path to the newly created plan file.
     """
-    if PlanState.plan_mode:
+    thread_id = _get_thread_id(runtime)
+    PlanState.set_current(thread_id)
+    session = PlanState.get(thread_id)
+
+    if session.plan_mode:
         return (
-            f"Already in plan mode.  Active plan: {PlanState.active_plan}\n"
+            f"Already in plan mode.  Active plan: {session.active_plan}\n"
             "Use plan_exit() first to close the current plan before starting a new one."
         )
 
@@ -251,16 +354,16 @@ def plan_enter(
 
     plan_path.write_text(content, encoding="utf-8")
 
-    # Update class-level state
-    PlanState.active_plan = plan_path
-    PlanState.plan_mode = True
-    PlanState.plan_mode_type = mode
+    # Update per-session state
+    session.active_plan = plan_path
+    session.plan_mode = True
+    session.plan_mode_type = mode
     # original_request is set by the caller (middleware) before invoking the tool
 
     logger.info("Plan created: %s (mode=%s)", plan_path, mode)
 
     # Emit custom event for LangGraph streaming consumers
-    dispatch_custom_event(
+    _emit_plan_event(
         "plan_created",
         {
             "plan_path": str(plan_path),
@@ -268,6 +371,7 @@ def plan_enter(
             "mode": mode,
             "created": now.isoformat(),
         },
+        runtime=runtime,
     )
 
     return (
@@ -283,6 +387,7 @@ def plan_enter(
 def plan_exit(
     summary: str,
     ready: bool = True,
+    runtime: Any = None,
 ) -> str:
     """Finalize the active plan and exit planning mode.
 
@@ -295,17 +400,23 @@ def plan_exit(
         summary: Brief summary of the completed plan (what it will do).
         ready: If ``True`` (default), marks the plan as ready for review.
                If ``False``, marks it as a draft (not yet finalized).
+        runtime: Injected by LangChain -- provides ``stream_writer``
+                 for emitting custom events to the LangGraph stream.
 
     Returns:
         Confirmation message with step/checkpoint counts.
     """
-    if not PlanState.plan_mode or PlanState.active_plan is None:
+    thread_id = _get_thread_id(runtime)
+    PlanState.set_current(thread_id)
+    session = PlanState.get(thread_id)
+
+    if not session.plan_mode or session.active_plan is None:
         return "Not in plan mode.  Call plan_enter() first to create a plan."
 
-    plan_path = PlanState.active_plan
+    plan_path = session.active_plan
 
     if not plan_path.exists():
-        PlanState.reset()
+        PlanState.reset(thread_id)
         return f"Plan file missing: {plan_path}.  State has been reset."
 
     # Read current plan content
@@ -350,20 +461,23 @@ def plan_exit(
         plan_path, step_count, checkpoint_count, ready,
     )
 
-    # Emit event for UI consumption
-    dispatch_custom_event(
-        "plan_ready_for_approval",
-        {
-            "plan_path": str(plan_path),
-            "summary": summary,
-            "step_count": step_count,
-            "checkpoint_count": checkpoint_count,
-            "ready": ready,
-        },
-    )
-
-    # Exit plan mode
-    PlanState.plan_mode = False
+    # Only emit approval event and exit plan mode when ready
+    if ready:
+        _emit_plan_event(
+            "plan_ready_for_approval",
+            {
+                "plan_path": str(plan_path),
+                "plan_content": content,
+                "summary": summary,
+                "step_count": step_count,
+                "checkpoint_count": checkpoint_count,
+                "ready": ready,
+            },
+            runtime=runtime,
+        )
+        # Exit plan mode — agent awaits user approval
+        session.plan_mode = False
+    # When ready=False, stay in plan mode so agent can continue editing
 
     return (
         f"Plan finalized: {plan_path}\n"
@@ -423,6 +537,82 @@ def checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# Cross-session plan tools
+# ---------------------------------------------------------------------------
+
+@tool
+def list_plans(status: str = "all", limit: int = 10) -> str:
+    """List your plans across all sessions.
+
+    Args:
+        status: Filter by status -- "active", "completed", "failed", or "all"
+        limit: Maximum number of plans to return
+    """
+    from ag3nt_agent.plan_index import get_plan_index
+
+    index = get_plan_index()
+    plans = index.list_plans(status=status if status != "all" else None, limit=limit)
+    if not plans:
+        return "No plans found."
+
+    lines = []
+    for p in plans:
+        date_str = p.created.strftime("%Y-%m-%d") if p.created else "unknown"
+        progress = f"{p.completed_count}/{p.task_count}" if p.task_count > 0 else "—"
+        lines.append(
+            f"- [{p.status}] {p.title} ({date_str}, {progress} tasks) ID: {p.plan_id}"
+        )
+    return "\n".join(lines)
+
+
+@tool
+def resume_plan(plan_id: str) -> str:
+    """Resume a plan from a previous session.
+
+    Loads the plan file, shows current progress, and sets it as
+    the active plan for this session.
+
+    Args:
+        plan_id: The plan ID (filename stem) from list_plans
+    """
+    from ag3nt_agent.plan_index import get_plan_index
+
+    index = get_plan_index()
+    content = index.get_plan_content(plan_id)
+    if content is None:
+        return f"Plan '{plan_id}' not found. Use list_plans() to see available plans."
+
+    # Set as active plan in PlanState
+    plans_dir = _get_plans_dir()
+    plan_path = plans_dir / f"{plan_id}.md"
+    if not plan_path.exists():
+        # Try fuzzy
+        for p in plans_dir.glob(f"*{plan_id}*.md"):
+            plan_path = p
+            break
+
+    # Find the thread_id from runtime context
+    thread_id = PlanState._current_thread_id or "default"
+    state = PlanState.get(thread_id)
+    state.active_plan = plan_path
+    state.plan_mode = True
+
+    # Count progress
+    total = len(re.findall(r"- \[[ x]\]", content, re.IGNORECASE))
+    done = len(re.findall(r"- \[x\]", content, re.IGNORECASE))
+
+    preview = content[:2000]
+    if len(content) > 2000:
+        preview += "\n\n[... truncated, use read_file to see full plan]"
+
+    return (
+        f"Plan resumed: {plan_path.name}\n"
+        f"Progress: {done}/{total} tasks completed\n\n"
+        f"{preview}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -432,4 +622,4 @@ def get_plan_tools() -> list:
     Returns:
         List of @tool decorated plan functions.
     """
-    return [plan_enter, plan_exit, checkpoint]
+    return [plan_enter, plan_exit, checkpoint, list_plans, resume_plan]
