@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any, Awaitable, Callable
 
 from langchain.agents.middleware.types import (
@@ -165,6 +166,11 @@ class AgentGuardMiddleware(AgentMiddleware[AgentState, Any]):
                 "Do NOT make any tool calls."
             )
 
+        # 3. Cost guardrail
+        cost_injection = self._check_cost_guardrail()
+        if cost_injection:
+            injections.append(cost_injection)
+
         if not injections:
             return request
 
@@ -172,14 +178,16 @@ class AgentGuardMiddleware(AgentMiddleware[AgentState, Any]):
         new_sys = append_to_system_message(request.system_message, text)
         return request.override(system_message=new_sys)
 
-    # -- Tool call hooks (output truncation) -----------------------------------
+    # -- Tool call hooks (output truncation + timing) --------------------------
 
     def wrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
     ) -> ToolMessage | Command[Any]:
+        start = time.monotonic()
         result = handler(request)
+        self._record_tool_timing(request, start)
         return self._maybe_truncate_result(result)
 
     async def awrap_tool_call(
@@ -187,7 +195,9 @@ class AgentGuardMiddleware(AgentMiddleware[AgentState, Any]):
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        start = time.monotonic()
         result = await handler(request)
+        self._record_tool_timing(request, start)
         return self._maybe_truncate_result(result)
 
     # -- Internals -------------------------------------------------------------
@@ -245,6 +255,58 @@ class AgentGuardMiddleware(AgentMiddleware[AgentState, Any]):
             logger.debug("Output truncation failed", exc_info=True)
 
         return result
+
+    @staticmethod
+    def _record_tool_timing(request: ToolCallRequest, start: float) -> None:
+        """Record tool call duration to cost tracker and trace logger."""
+        duration_ms = (time.monotonic() - start) * 1000
+        tool_name = getattr(request, "tool_name", None) or getattr(request, "name", "unknown")
+        try:
+            from ag3nt_agent.cost_tracker import get_cost_tracker
+            get_cost_tracker().record_tool_timing(tool_name, duration_ms)
+        except Exception:
+            pass
+        try:
+            from ag3nt_agent.trace_logger import get_trace_logger, is_langsmith_configured
+            if not is_langsmith_configured():
+                get_trace_logger().log_tool_call(tool_name, duration_ms)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _check_cost_guardrail() -> str | None:
+        """Check session cost against limit. Returns injection text or None."""
+        try:
+            from ag3nt_agent.agent_config import MAX_SESSION_COST_USD
+            from ag3nt_agent.cost_tracker import get_cost_tracker
+
+            tracker = get_cost_tracker()
+            total = tracker.get_session_total()
+            cost = total.estimated_cost_usd
+            limit = MAX_SESSION_COST_USD
+
+            if cost >= limit * 2:
+                logger.warning("Hard cost limit reached: $%.2f (limit $%.2f)", cost, limit)
+                return (
+                    f"SESSION COST LIMIT EXCEEDED (${{cost:.2f}} / ${{limit:.2f}}).\n"
+                    "You MUST stop all tool calls immediately.\n"
+                    "Respond with a summary of what was accomplished."
+                ).format(cost=cost, limit=limit)
+            elif cost >= limit:
+                logger.warning("Soft cost limit reached: $%.2f (limit $%.2f)", cost, limit)
+                return (
+                    f"COST WARNING: Session cost (${{cost:.2f}}) has reached the "
+                    f"limit (${{limit:.2f}}). Avoid tool calls unless essential. "
+                    "Wrap up your current task efficiently."
+                ).format(cost=cost, limit=limit)
+            elif cost >= limit * 0.8:
+                return (
+                    f"Cost notice: ${{cost:.2f}} of ${{limit:.2f}} session budget used ({{pct:.0f}}%). "
+                    "Be mindful of token usage."
+                ).format(cost=cost, limit=limit, pct=(cost / limit) * 100)
+        except Exception:
+            logger.debug("Cost guardrail check failed", exc_info=True)
+        return None
 
     @staticmethod
     def _extract_session_id(request: ModelRequest) -> str:
