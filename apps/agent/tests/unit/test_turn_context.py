@@ -67,7 +67,17 @@ def _mock_append_to_system_message(system_message, text):
     return new_msg
 
 
+def _mock_append_cached_text(system_message, text, cache=True):
+    """Fake cached append — returns a new mock with text and cache flag."""
+    new_msg = MagicMock()
+    new_msg._appended_text = text
+    new_msg._cached = cache
+    new_msg._original = system_message
+    return new_msg
+
+
 _da_mw_utils.append_to_system_message = _mock_append_to_system_message
+_da_mw_utils.append_cached_text = _mock_append_cached_text
 
 # Register all mock modules
 for mod_name, mod_obj in _mock_modules.items():

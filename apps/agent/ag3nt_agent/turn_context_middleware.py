@@ -22,7 +22,7 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.messages import SystemMessage
 
-from deepagents.middleware._utils import append_to_system_message
+from deepagents.middleware._utils import append_to_system_message, append_cached_text
 
 from ag3nt_agent.identity import IdentityLoader
 
@@ -104,72 +104,83 @@ class TurnContextMiddleware(AgentMiddleware[AgentState, Any]):
             return request.override(system_message=new_sys)
 
         # FULL mode: identity + memory + ui_context + environment + summary guardrail
-        parts: list[str] = []
+        #
+        # Stable blocks (identity, skills) use append_cached_text so that
+        # Anthropic prompt caching (via PromptCachingMiddleware) can re-use
+        # them across turns.  Volatile blocks (memory, environment, etc.)
+        # use the regular append_to_system_message without cache_control.
 
-        # 1. Identity
+        sys_msg = request.system_message
+
+        # 1. Identity — stable across turns → cached
         try:
             identity_text = self._identity.build_system_prompt()
             if identity_text:
-                parts.append(identity_text)
+                identity_text = identity_text.encode("utf-8", errors="replace").decode("utf-8")
+                sys_msg = append_cached_text(sys_msg, identity_text, cache=True)
         except Exception:
             logger.debug("Identity loading failed", exc_info=True)
 
-        # 2. Memory recall
+        # 2. Skills manifest — stable across turns → cached
+        if self._skills_metadata_fn:
+            try:
+                manifest = self._build_skills_manifest(self._skills_metadata_fn())
+                if manifest:
+                    manifest = manifest.encode("utf-8", errors="replace").decode("utf-8")
+                    sys_msg = append_cached_text(sys_msg, manifest, cache=True)
+            except Exception:
+                logger.debug("Skills manifest loading failed", exc_info=True)
+
+        # 3. Memory recall — changes per turn → NOT cached
+        volatile_parts: list[str] = []
         user_text = self._extract_latest_user_message(
             request.state.get("messages", [])
         )
         if user_text and self._memory_search:
             memory_text = self._recall_memory(user_text)
             if memory_text:
-                parts.append(memory_text)
+                volatile_parts.append(memory_text)
 
-        # 3. UI context (passed via config metadata by the daemon)
+        # 4. UI context (passed via config metadata by the daemon) → NOT cached
         try:
             from langgraph.config import get_config
             cfg = get_config()
             ui_ctx = (cfg.get("metadata") or {}).get("ui_context")
             if ui_ctx:
-                parts.append(f"## UI Context\n{ui_ctx}")
+                volatile_parts.append(f"## UI Context\n{ui_ctx}")
         except Exception:
             logger.debug("UI context not available", exc_info=True)
 
-        # 4. Environment block
-        parts.append(self._environment_block())
+        # 5. Environment block — has timestamp, changes per turn → NOT cached
+        volatile_parts.append(self._environment_block())
 
-        # 5. Skills manifest (compact list of available skills)
-        if self._skills_metadata_fn:
-            try:
-                manifest = self._build_skills_manifest(self._skills_metadata_fn())
-                if manifest:
-                    parts.append(manifest)
-            except Exception:
-                logger.debug("Skills manifest loading failed", exc_info=True)
-
-        # 6. Context budget report (only when usage is elevated)
+        # 6. Context budget report (only when usage is elevated) → NOT cached
         if self._context_budget_fn:
             try:
                 report = self._context_budget_fn()
                 if report:
-                    parts.append(f"## Context Budget\n{report}")
+                    volatile_parts.append(f"## Context Budget\n{report}")
             except Exception:
                 logger.debug("Context budget report failed", exc_info=True)
 
-        # 7. Summary guardrail
-        parts.append(
+        # 7. Summary guardrail → NOT cached (small, volatile-adjacent)
+        volatile_parts.append(
             "## Context Handling\n"
             "If a conversation summary appears in the message history, "
             "use it silently for context continuity. Never repeat, describe, "
             "or reference the summary content in your response."
         )
 
-        if not parts:
+        if volatile_parts:
+            volatile_text = "\n\n".join(volatile_parts)
+            # Strip unpaired surrogates that break UTF-8 encoding in the LLM API call
+            volatile_text = volatile_text.encode("utf-8", errors="replace").decode("utf-8")
+            sys_msg = append_to_system_message(sys_msg, volatile_text)
+
+        if sys_msg is request.system_message:
             return request
 
-        context = "\n\n".join(parts)
-        # Strip unpaired surrogates that break UTF-8 encoding in the LLM API call
-        context = context.encode("utf-8", errors="replace").decode("utf-8")
-        new_sys = append_to_system_message(request.system_message, context)
-        return request.override(system_message=new_sys)
+        return request.override(system_message=sys_msg)
 
     def _recall_memory(self, user_text: str) -> str:
         topics = self._extract_topics(user_text)
