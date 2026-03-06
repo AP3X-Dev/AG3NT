@@ -517,6 +517,10 @@ def _create_task_tool(
         # copy.copy creates new top-level containers (lists, dicts) without the cost of deepcopy.
         subagent_state = {k: copy.copy(v) for k, v in runtime.state.items() if k not in _EXCLUDED_STATE_KEYS}
         subagent_state["messages"] = [HumanMessage(content=description)]
+        # Propagate and increment depth
+        current_depth = runtime.state.get("_subagent_depth", 0)
+        subagent_state["_subagent_depth"] = current_depth + 1
+        subagent_state["_max_subagent_depth"] = runtime.state.get("_max_subagent_depth", 2)
         return subagent, subagent_state
 
     # Use custom description if provided, otherwise use default template
@@ -567,6 +571,14 @@ def _create_task_tool(
         subagent_type: Annotated[str, "The type of subagent to use. Must be one of the available agent types listed in the tool description."],
         runtime: ToolRuntime,
     ) -> str | Command:
+        # Depth check
+        current_depth = runtime.state.get("_subagent_depth", 0)
+        max_depth = runtime.state.get("_max_subagent_depth", 2)
+        if current_depth >= max_depth:
+            return (
+                f"Cannot spawn subagent: maximum nesting depth ({max_depth}) reached. "
+                f"Current depth: {current_depth}. Complete this task directly instead."
+            )
         if subagent_type not in subagent_graphs:
             closest = _find_closest_subagent(subagent_type, subagent_graphs)
             if closest:
@@ -600,6 +612,14 @@ def _create_task_tool(
         subagent_type: Annotated[str, "The type of subagent to use. Must be one of the available agent types listed in the tool description."],
         runtime: ToolRuntime,
     ) -> str | Command:
+        # Depth check
+        current_depth = runtime.state.get("_subagent_depth", 0)
+        max_depth = runtime.state.get("_max_subagent_depth", 2)
+        if current_depth >= max_depth:
+            return (
+                f"Cannot spawn subagent: maximum nesting depth ({max_depth}) reached. "
+                f"Current depth: {current_depth}. Complete this task directly instead."
+            )
         if subagent_type not in subagent_graphs:
             closest = _find_closest_subagent(subagent_type, subagent_graphs)
             if closest:
