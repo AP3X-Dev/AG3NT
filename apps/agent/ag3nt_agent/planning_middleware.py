@@ -359,6 +359,8 @@ If a validation gate fails, fix the issues before moving to the next task.
 
     def advance_task(self, thread_id: str):
         """Move to next task in plan, with optional executor tracking."""
+        deferred_learning: tuple | None = None
+
         with self._lock:
             if thread_id not in self.sessions:
                 return
@@ -389,20 +391,24 @@ If a validation gate fails, fix the issues before moving to the next task.
                     except Exception as exc:
                         logger.debug("PlanExecutor completion emit error: %s", exc)
 
-                # Record learning outcome (fire-and-forget)
-                self._record_learning_outcome(plan_state, thread_id, success=True)
-                return
+                # Defer learning recording to outside the lock to avoid
+                # deadlock when _record_learning_outcome calls asyncio.run()
+                deferred_learning = (plan_state, thread_id, True)
+            else:
+                # Emit next step started
+                if executor and plan_state.current_task_index < len(executor.steps):
+                    try:
+                        next_step = executor.steps[plan_state.current_task_index]
+                        executor.emit_step_started(next_step)
+                        executor.create_git_checkpoint(next_step.number)
+                    except Exception as exc:
+                        logger.debug("PlanExecutor next step emit error: %s", exc)
 
-            # Emit next step started
-            if executor and plan_state.current_task_index < len(executor.steps):
-                try:
-                    next_step = executor.steps[plan_state.current_task_index]
-                    executor.emit_step_started(next_step)
-                    executor.create_git_checkpoint(next_step.number)
-                except Exception as exc:
-                    logger.debug("PlanExecutor next step emit error: %s", exc)
+                logger.info(f"Advanced to task {plan_state.current_task_index + 1}")
 
-            logger.info(f"Advanced to task {plan_state.current_task_index + 1}")
+        # Fire-and-forget learning recording outside the lock
+        if deferred_learning:
+            self._record_learning_outcome(*deferred_learning)
 
     def run_validation_gate(
         self, thread_id: str, files_modified: list[str] | None = None,
@@ -556,14 +562,43 @@ If a validation gate fails, fix the issues before moving to the next task.
 
         if plan_state.planning_phase and not plan_state.plan_confirmed:
             if plan_state.context_engineering and plan_state.context_package:
-                return self._get_context_planning_prompt(plan_state.context_package)
-            return self._get_planning_prompt()
+                base = self._get_context_planning_prompt(plan_state.context_package)
+            else:
+                base = self._get_planning_prompt()
+            # Inject past learnings (default-on, no opt-in required)
+            learnings_text = self._retrieve_learnings(plan_state)
+            if learnings_text:
+                base = f"{base}\n\n{learnings_text}"
+            return base
         elif plan_state.plan_confirmed:
             if plan_state.validation_gates_enabled:
                 return self._get_execution_with_validation_prompt(plan_state)
             return self._get_execution_prompt(plan_state)
 
         return None
+
+    @staticmethod
+    def _retrieve_learnings(plan_state: PlanningState) -> str:
+        """Retrieve past learnings relevant to the current planning topic.
+
+        Uses both the context engine (vector search) and keyword search
+        over local blueprint/plan files. Returns formatted prompt text
+        or empty string if no learnings found.
+        """
+        try:
+            from ag3nt_agent.learning_retrieval import (
+                format_learnings_for_prompt,
+                retrieve_learnings,
+            )
+
+            query = plan_state.original_request or ""
+            if not query:
+                return ""
+            learnings = retrieve_learnings(query, limit=5)
+            return format_learnings_for_prompt(learnings)
+        except Exception:
+            logger.debug("Learning retrieval failed", exc_info=True)
+            return ""
 
     def wrap_model_call(
         self,
