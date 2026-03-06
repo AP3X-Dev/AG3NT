@@ -25,7 +25,13 @@ if not hasattr(_lc_core_tools, "tool"):
 
     _lc_core_tools.tool = _mock_tool_decorator
 
-from ag3nt_agent.context_tools import dump_to_artifact, read_artifact, get_context_tools
+from ag3nt_agent.context_tools import (
+    dump_to_artifact,
+    read_artifact,
+    check_context_budget,
+    compact_now,
+    get_context_tools,
+)
 
 
 class TestDumpToArtifact:
@@ -84,9 +90,55 @@ class TestReadArtifact:
 
 
 class TestGetContextTools:
-    def test_returns_both_tools(self):
+    def test_returns_all_tools(self):
         tools = get_context_tools()
         assert isinstance(tools, list)
-        assert len(tools) == 2
+        assert len(tools) == 4
         assert dump_to_artifact in tools
         assert read_artifact in tools
+        assert check_context_budget in tools
+        assert compact_now in tools
+
+
+class TestCheckContextBudget:
+    def test_returns_budget_when_available(self):
+        mock_trigger = MagicMock()
+        mock_trigger.usage_ratio.return_value = 0.45
+        mock_trigger._config.prune_threshold = 0.60
+        mock_trigger._config.extract_threshold = 0.70
+        mock_trigger._config.compact_threshold = 0.80
+        with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=mock_trigger):
+            result = check_context_budget.invoke({})
+        assert "45" in result
+        assert "OK" in result
+
+    def test_returns_warning_when_high(self):
+        mock_trigger = MagicMock()
+        mock_trigger.usage_ratio.return_value = 0.72
+        mock_trigger._config.prune_threshold = 0.60
+        mock_trigger._config.extract_threshold = 0.70
+        mock_trigger._config.compact_threshold = 0.80
+        with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=mock_trigger):
+            result = check_context_budget.invoke({})
+        assert "72" in result
+        assert "EXTRACT" in result
+        assert "artifact" in result.lower()
+
+    def test_unavailable_when_no_trigger(self):
+        with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=None):
+            result = check_context_budget.invoke({})
+        assert "not available" in result.lower()
+
+
+class TestCompactNow:
+    def test_requests_compaction(self):
+        mock_trigger = MagicMock()
+        with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=mock_trigger):
+            result = compact_now.invoke({})
+        mock_trigger.request_immediate.assert_called_once()
+        assert "requested" in result.lower()
+
+    def test_unavailable_when_no_trigger(self):
+        with patch("ag3nt_agent.context_tools._get_compaction_trigger", return_value=None):
+            result = compact_now.invoke({})
+        assert "not available" in result.lower()

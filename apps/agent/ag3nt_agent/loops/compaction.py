@@ -110,6 +110,7 @@ class CompactionTrigger:
         self._turn_count: int = 0
         self._sub_ids: list[str] = []
         self._running: bool = False
+        self._force_requested: bool = False
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -141,6 +142,24 @@ class CompactionTrigger:
         self._running = False
         logger.info("CompactionTrigger stopped")
 
+    def request_immediate(self) -> None:
+        """Request immediate compaction at the next opportunity.
+
+        Sets a force flag that :meth:`needs_compaction` will honour
+        regardless of the current usage ratio.  Also fires a
+        ``compaction.needed`` event on the bus so listeners react
+        immediately.
+        """
+        self._force_requested = True
+        # Fire-and-forget: schedule the event on the running loop if one
+        # exists; otherwise the flag alone is sufficient.
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._emit_compaction_needed())
+        except RuntimeError:
+            pass  # no running loop — the flag will be picked up synchronously
+        logger.info("Immediate compaction requested")
+
     # -- public API ----------------------------------------------------------
 
     def set_context_window(self, tokens: int) -> None:
@@ -160,7 +179,11 @@ class CompactionTrigger:
 
     def needs_compaction(self) -> bool:
         """Return ``True`` if current usage exceeds the threshold *and*
-        enough turns have elapsed."""
+        enough turns have elapsed, or if an immediate compaction was
+        requested via :meth:`request_immediate`."""
+        if self._force_requested:
+            self._force_requested = False
+            return True
         estimated = self._estimate_tokens(self._cumulative_chars)
         threshold = int(self._context_window * self._config.threshold_ratio)
         return (

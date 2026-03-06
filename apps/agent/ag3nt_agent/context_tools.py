@@ -1,7 +1,9 @@
-"""Context-window management tools: dump_to_artifact & read_artifact.
+"""Context-window management tools.
 
-These tools expose the ArtifactStore to the agent so it can offload
-large content out of context and retrieve it later by ID.
+Provides:
+- dump_to_artifact / read_artifact — offload large content to the ArtifactStore.
+- check_context_budget — query current context-window usage ratio.
+- compact_now — request immediate context compaction.
 """
 from __future__ import annotations
 
@@ -12,6 +14,23 @@ from langchain_core.tools import tool
 from ag3nt_agent.artifact_store import get_artifact_store
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+#  Compaction trigger hook — set at agent start-up so tools can inspect usage.
+# ---------------------------------------------------------------------------
+
+_compaction_trigger = None
+
+
+def set_compaction_trigger(trigger) -> None:
+    """Wire the :class:`CompactionTrigger` instance into context tools."""
+    global _compaction_trigger
+    _compaction_trigger = trigger
+
+
+def _get_compaction_trigger():
+    """Return the current compaction trigger (or ``None``)."""
+    return _compaction_trigger
 
 
 @tool
@@ -53,6 +72,68 @@ def read_artifact(artifact_id: str) -> str:
     return content
 
 
+@tool
+def check_context_budget() -> str:
+    """Check current context window usage and compaction status.
+
+    Returns usage ratio, active tier, and recommendation.
+    Use to decide whether to offload content to artifacts or request compaction.
+    """
+    trigger = _get_compaction_trigger()
+    if trigger is None:
+        return "Context budget tracking not available."
+
+    ratio = trigger.usage_ratio()
+    cfg = trigger._config
+    pct = ratio * 100
+
+    # Determine tier based on ratio vs thresholds.
+    if ratio >= cfg.compact_threshold:
+        tier = "COMPACT"
+        recommendation = (
+            "Critical — context is nearly full. "
+            "Run compact_now immediately and offload large content to artifacts."
+        )
+    elif ratio >= cfg.extract_threshold:
+        tier = "EXTRACT"
+        recommendation = (
+            "High usage — consider offloading large outputs to artifacts "
+            "with dump_to_artifact or running compact_now."
+        )
+    elif ratio >= cfg.prune_threshold:
+        tier = "PRUNE"
+        recommendation = (
+            "Moderate usage — you can continue, but start offloading "
+            "large tool outputs to artifacts to stay under budget."
+        )
+    else:
+        tier = "OK"
+        recommendation = "Usage is within budget. No action needed."
+
+    return (
+        f"Context usage: {pct:.1f}%\n"
+        f"Tier: {tier}\n"
+        f"Thresholds: prune={cfg.prune_threshold*100:.0f}%, "
+        f"extract={cfg.extract_threshold*100:.0f}%, "
+        f"compact={cfg.compact_threshold*100:.0f}%\n"
+        f"Recommendation: {recommendation}"
+    )
+
+
+@tool
+def compact_now() -> str:
+    """Request immediate context compaction.
+
+    Use when running low on context budget or before starting a large task
+    that will generate significant output.
+    """
+    trigger = _get_compaction_trigger()
+    if trigger is None:
+        return "Compaction system not available."
+    trigger.request_immediate()
+    return "Compaction requested. Will apply at next opportunity."
+
+
 def get_context_tools() -> list:
     """Factory function for the tool registry."""
-    return [dump_to_artifact, read_artifact]
+    return [dump_to_artifact, read_artifact, check_context_budget, compact_now]
