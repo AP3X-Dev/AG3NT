@@ -32,7 +32,12 @@ import { TelegramAdapter } from "../channels/adapters/TelegramAdapter.js";
 import { DiscordAdapter } from "../channels/adapters/DiscordAdapter.js";
 import { SlackAdapter } from "../channels/adapters/SlackAdapter.js";
 import type { DMPolicy } from "../channels/types.js";
+import { ChannelDeliveryService } from "../channels/ChannelDeliveryService.js";
 import { Scheduler, type SchedulerConfig, type CronJobDefinition } from "../scheduler/index.js";
+import { CronJobStore } from "../scheduler/CronJobStore.js";
+import { SessionRecovery } from "../scheduler/SessionRecovery.js";
+import { PushNotificationService } from "../push/PushNotificationService.js";
+import { createPushRouter } from "../routes/push.js";
 import { NodeRegistry, NodeConnectionManager, PairingManager } from "../nodes/index.js";
 import { SkillsManager } from "../skills/index.js";
 import { gatewayLogs } from "../logs/index.js";
@@ -57,8 +62,10 @@ import {
 import { createRateLimitMiddleware, createChatRateLimitMiddleware } from "../middleware/rateLimiter.js";
 import { createRequestLogger } from "../middleware/requestLogger.js";
 import { createHealthRoutes } from "../routes/health.js";
+import { createNotificationsRouter, emitScheduledMessage } from "../routes/notifications.js";
 import { validateWorkspacePath } from "../utils/pathSecurity.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
+// HEARTBEAT_DEFAULTS available in ../config/constants.js for future active-hours configuration
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -165,6 +172,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Initialize channel registry
   const channelRegistry = new ChannelRegistry();
 
+  // Initialize channel delivery service for scheduled notification routing
+  const channelDelivery = new ChannelDeliveryService();
+
   // Register enabled channel adapters from config
   registerChannelAdapters(config, channelRegistry);
 
@@ -217,6 +227,8 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
   // Subscribe to gateway logs for debug streaming
   gatewayLogs.subscribe((entry) => {
+    if (debugClients.size === 0) return;
+
     let message: string;
     try {
       message = JSON.stringify({
@@ -280,6 +292,11 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
   // Wire channel registry message handler to router
   channelRegistry.setMessageHandler(async (message) => {
+    // Track chat ID for scheduled notification delivery
+    const adapterId = channelRegistry.all().find(a => a.type === message.channelType)?.id;
+    if (adapterId) {
+      channelDelivery.trackIncomingMessage(adapterId, message.chatId);
+    }
     return router.handleChannelMessage(message);
   });
 
@@ -308,12 +325,31 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Initialize scheduler
+  const userDataPath = path.join(os.homedir(), ".ag3nt");
   const schedulerConfig: SchedulerConfig = {
     heartbeat: {
       intervalMinutes: config.scheduler.heartbeatMinutes,
     },
     cronJobs: config.scheduler.cron as CronJobDefinition[],
+    workspacePath: path.join(userDataPath, "workspace"),
   };
+
+  // Create persistent cron job store
+  const cronStorePath = path.join(os.homedir(), '.ag3nt', 'cron');
+  const cronJobStore = new CronJobStore(cronStorePath);
+
+  // Create session recovery for gateway state persistence
+  const sessionRecovery = new SessionRecovery(userDataPath);
+
+  // Create push notification service
+  const pushService = new PushNotificationService(
+    path.join(os.homedir(), '.ag3nt', 'push'),
+    {
+      teamId: process.env.APNS_TEAM_ID ?? '',
+      keyId: process.env.APNS_KEY_ID ?? '',
+      privateKey: process.env.APNS_PRIVATE_KEY ?? '',
+    },
+  );
 
   const scheduler = new Scheduler(
     schedulerConfig,
@@ -329,22 +365,22 @@ export async function createGateway(config: Config): Promise<Gateway> {
         notify: result.ok && !result.error,
       };
     },
-    // Channel notifier: sends notifications to connected channels
-    async (channelTarget, message) => {
-      // Get the first connected channel or target-specific channel
-      const adapters = channelRegistry.all();
-      const target = channelTarget
-        ? adapters.find((a) => a.type === channelTarget || a.id === channelTarget)
-        : adapters.find((a) => a.isConnected());
+    // Channel notifier: sends notifications to connected channels and SSE bus
+    async (channelTarget, message, metadata) => {
+      // 1. Emit to SSE notification bus (for UI)
+      emitScheduledMessage({
+        text: message,
+        channelTarget,
+        timestamp: new Date().toISOString(),
+        jobId: metadata?.jobId,
+        jobName: metadata?.jobName,
+        type: metadata?.type,
+        sessionId: metadata?.sessionId,
+      });
 
-      if (target) {
-        // For now, log notification - actual channel notification requires
-        // storing a reference to send to (e.g., a chat ID)
-        console.log(`[Scheduler] Notification to ${target.id}: ${message.slice(0, 100)}`);
-        // TODO: Implement actual channel notification with stored chat IDs
-      } else {
-        console.log(`[Scheduler] No channel available for notification: ${message.slice(0, 100)}`);
-      }
+      // 2. Also notify channel adapters (Telegram, Discord, etc.)
+      const adapters = channelRegistry.all();
+      await channelDelivery.deliverToType(adapters, channelTarget, message);
     },
     // Event handler: log scheduler events
     (event) => {
@@ -352,7 +388,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
         jobId: event.jobId,
         timestamp: event.timestamp.toISOString(),
       });
-    }
+    },
+    // Persistent cron job store
+    cronJobStore
   );
 
   // Health check endpoint
@@ -564,6 +602,10 @@ export async function createGateway(config: Config): Promise<Gateway> {
   const sessionDirectiveRoutes = createSessionDirectiveRoutes(sessionManager, directiveManager);
   app.use("/api/enhanced-sessions", sessionDirectiveRoutes);
 
+  // Mount SSE notifications route for scheduled message delivery
+  const notificationsRouter = createNotificationsRouter();
+  app.use("/api/notifications", notificationsRouter);
+
   // Mount SSE stream routes for real-time tool updates
   const streamModule = await import("../routes/stream.js");
   const streamRouter = streamModule.createStreamRouter();
@@ -575,6 +617,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
   const { createStateRouter } = await import("../routes/state.js");
   const stateRouter = createStateRouter();
   app.use("/api/state", stateRouter);
+
+  // Mount push notification token management routes
+  app.use(`${config.gateway.httpPath}/push`, createPushRouter(pushService));
 
   // Mount plugin-registered HTTP routes
   if (pluginRegistry) {
@@ -989,6 +1034,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
     kimi: {
       name: "Kimi (Direct)",
       models: [
+        { id: "kimi-for-coding", name: "Kimi K2 (Coding)" },
         { id: "moonshot-v1-128k", name: "Moonshot V1 128K" },
         { id: "moonshot-v1-32k", name: "Moonshot V1 32K" },
         { id: "moonshot-v1-8k", name: "Moonshot V1 8K" },
@@ -1022,11 +1068,11 @@ export async function createGateway(config: Config): Promise<Gateway> {
   };
 
   // Get current model configuration
-  app.get(`${config.gateway.httpPath}/model/config`, (_req, res) => {
+  app.get(`${config.gateway.httpPath}/model/config`, async (_req, res) => {
     try {
       const envPath = getEnvPath();
 
-      if (!fs.existsSync(envPath)) {
+      if (!(await fileExists(envPath))) {
         res.json({
           ok: true,
           provider: "openrouter",
@@ -1036,7 +1082,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
         return;
       }
 
-      const content = fs.readFileSync(envPath, "utf-8");
+      const content = await fsp.readFile(envPath, "utf-8");
       const env = parseEnvFile(content);
 
       res.json({
@@ -1052,7 +1098,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Update model configuration
-  app.post(`${config.gateway.httpPath}/model/config`, (req, res) => {
+  app.post(`${config.gateway.httpPath}/model/config`, async (req, res) => {
     try {
       const { provider, model } = req.body;
 
@@ -1070,8 +1116,8 @@ export async function createGateway(config: Config): Promise<Gateway> {
       const envPath = getEnvPath();
       let content = "";
 
-      if (fs.existsSync(envPath)) {
-        content = fs.readFileSync(envPath, "utf-8");
+      if (await fileExists(envPath)) {
+        content = await fsp.readFile(envPath, "utf-8");
       }
 
       // Update or add AG3NT_MODEL_PROVIDER
@@ -1088,7 +1134,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
         content += `\nAG3NT_MODEL_NAME=${model}`;
       }
 
-      fs.writeFileSync(envPath, content);
+      await fsp.writeFile(envPath, content);
 
       gatewayLogs.info("Model", `Model config updated: ${provider}/${model}`);
       res.json({ ok: true, message: "Model configuration updated. Restart agent to apply." });
@@ -1165,6 +1211,16 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Memory API
   // ========================================
 
+  // Async file existence check (replaces fs.existsSync in async handlers)
+  const fileExists = async (p: string): Promise<boolean> => {
+    try {
+      await fsp.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   // Get user data path (cross-platform)
   const getUserDataPath = (): string => {
     const homeDir = os.homedir();
@@ -1172,7 +1228,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
   };
 
   // List memory files
-  app.get(`${config.gateway.httpPath}/memory/files`, (_req, res) => {
+  app.get(`${config.gateway.httpPath}/memory/files`, async (_req, res) => {
     try {
       const userDataPath = getUserDataPath();
       const memoryPath = path.join(userDataPath, "memory");
@@ -1183,8 +1239,8 @@ export async function createGateway(config: Config): Promise<Gateway> {
       const mainFiles = ["AGENTS.md", "MEMORY.md"];
       for (const filename of mainFiles) {
         const filePath = path.join(userDataPath, filename);
-        if (fs.existsSync(filePath)) {
-          const stat = fs.statSync(filePath);
+        if (await fileExists(filePath)) {
+          const stat = await fsp.stat(filePath);
           files.push({
             name: filename,
             path: filename,
@@ -1196,11 +1252,12 @@ export async function createGateway(config: Config): Promise<Gateway> {
       }
 
       // Add daily log files from memory/ folder
-      if (fs.existsSync(memoryPath)) {
-        const logFiles = fs.readdirSync(memoryPath).filter((f) => f.endsWith(".md"));
+      if (await fileExists(memoryPath)) {
+        const allLogFiles = await fsp.readdir(memoryPath);
+        const logFiles = allLogFiles.filter((f) => f.endsWith(".md"));
         for (const filename of logFiles) {
           const filePath = path.join(memoryPath, filename);
-          const stat = fs.statSync(filePath);
+          const stat = await fsp.stat(filePath);
           files.push({
             name: filename,
             path: `memory/${filename}`,
@@ -1222,7 +1279,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Read a memory file
-  app.get(`${config.gateway.httpPath}/memory/file`, (req, res) => {
+  app.get(`${config.gateway.httpPath}/memory/file`, async (req, res) => {
     try {
       const { path: filePath } = req.query;
       if (!filePath || typeof filePath !== "string") {
@@ -1240,13 +1297,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
         return;
       }
 
-      if (!fs.existsSync(fullPath)) {
+      if (!(await fileExists(fullPath))) {
         sendError(res, "File not found", 404);
         return;
       }
 
-      const content = fs.readFileSync(fullPath, "utf-8");
-      const stat = fs.statSync(fullPath);
+      const content = await fsp.readFile(fullPath, "utf-8");
+      const stat = await fsp.stat(fullPath);
 
       res.json({
         ok: true,
@@ -1262,7 +1319,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Update a memory file
-  app.post(`${config.gateway.httpPath}/memory/file`, (req, res) => {
+  app.post(`${config.gateway.httpPath}/memory/file`, async (req, res) => {
     try {
       const { path: filePath, content } = req.body;
       if (!filePath || typeof filePath !== "string") {
@@ -1286,11 +1343,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
       // Create parent directories if needed
       const parentDir = path.dirname(fullPath);
-      if (!fs.existsSync(parentDir)) {
-        fs.mkdirSync(parentDir, { recursive: true });
-      }
+      await fsp.mkdir(parentDir, { recursive: true });
 
-      fs.writeFileSync(fullPath, content, "utf-8");
+      await fsp.writeFile(fullPath, content, "utf-8");
       gatewayLogs.info("Memory", `File updated: ${filePath}`);
 
       res.json({ ok: true, message: "File saved successfully" });
@@ -1301,7 +1356,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
   });
 
   // Create a new memory file
-  app.post(`${config.gateway.httpPath}/memory/create`, (req, res) => {
+  app.post(`${config.gateway.httpPath}/memory/create`, async (req, res) => {
     try {
       const { filename, type } = req.body;
       if (!filename || typeof filename !== "string") {
@@ -1313,9 +1368,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
       const memoryPath = path.join(userDataPath, "memory");
 
       // Ensure memory directory exists
-      if (!fs.existsSync(memoryPath)) {
-        fs.mkdirSync(memoryPath, { recursive: true });
-      }
+      await fsp.mkdir(memoryPath, { recursive: true });
 
       const filePath = type === "log" ? path.join(memoryPath, filename) : path.join(userDataPath, filename);
 
@@ -1326,7 +1379,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
         return;
       }
 
-      if (fs.existsSync(filePath)) {
+      if (await fileExists(filePath)) {
         sendError(res, "File already exists", 400);
         return;
       }
@@ -1335,7 +1388,7 @@ export async function createGateway(config: Config): Promise<Gateway> {
         ? `# ${filename.replace(".md", "")}\n\n## Notes\n\n`
         : `# ${filename.replace(".md", "")}\n\n`;
 
-      fs.writeFileSync(filePath, template, "utf-8");
+      await fsp.writeFile(filePath, template, "utf-8");
       gatewayLogs.info("Memory", `File created: ${filename}`);
 
       res.json({ ok: true, path: type === "log" ? `memory/${filename}` : filename });
@@ -1354,6 +1407,15 @@ export async function createGateway(config: Config): Promise<Gateway> {
   // Fallback to index.html for SPA routing
   app.get("/", (_req, res) => {
     res.sendFile(path.join(uiPath, "index.html"));
+  });
+
+  // Express error-handling middleware (must be after all routes)
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[Gateway] Unhandled route error:", err);
+    gatewayLogs.error("HTTP", `Unhandled error: ${err.message}`, { stack: err.stack });
+    if (!res.headersSent) {
+      sendError(res, "Internal server error", 500);
+    }
   });
 
   // Simple HTTP chat endpoint for CLI channel
@@ -1575,6 +1637,10 @@ export async function createGateway(config: Config): Promise<Gateway> {
   wss.on("connection", (ws, req) => {
     console.log(`[Gateway] WebSocket connection from ${req.url}`);
 
+    // Ping/pong keep-alive tracking
+    (ws as any).__alive = true;
+    ws.on("pong", () => { (ws as any).__alive = true; });
+
     // Check if this is a debug connection (for control panel)
     const isDebug = req.url?.includes("debug=true");
 
@@ -1614,6 +1680,18 @@ export async function createGateway(config: Config): Promise<Gateway> {
     });
   });
 
+  // WebSocket keep-alive: ping every 30s, terminate dead connections
+  const wsPingInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if ((ws as any).__alive === false) {
+        ws.terminate();
+        return;
+      }
+      (ws as any).__alive = false;
+      ws.ping();
+    });
+  }, 30_000);
+
   return {
     start: async () => {
       // Connect all registered channel adapters
@@ -1621,6 +1699,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
 
       // Start the scheduler
       scheduler.start();
+
+      // Checkpoint gateway state on startup
+      sessionRecovery.checkpoint({
+        lastHeartbeat: null,
+        activeSessions: [],
+        schedulerRunning: true,
+      });
 
       // Start plugin services
       if (pluginRegistry) {
@@ -1649,6 +1734,9 @@ export async function createGateway(config: Config): Promise<Gateway> {
       });
     },
     stop: async () => {
+      // Stop WebSocket keep-alive
+      clearInterval(wsPingInterval);
+
       // Execute gateway_stop hooks
       if (pluginRegistry) {
         await executeHooks(pluginRegistry, 'gateway_stop', { reason: 'shutdown' }, {
@@ -1665,6 +1753,13 @@ export async function createGateway(config: Config): Promise<Gateway> {
         };
         await stopServices(pluginRegistry, serviceContext);
       }
+
+      // Save gateway state before shutdown
+      sessionRecovery.checkpoint({
+        lastHeartbeat: scheduler.getLastHeartbeat()?.toISOString() ?? null,
+        activeSessions: [],
+        schedulerRunning: false,
+      });
 
       // Stop the scheduler
       scheduler.stop();

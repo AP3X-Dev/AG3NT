@@ -24,6 +24,10 @@ export function ChatSidebar({ className }: { className?: string }) {
     stopAgent,
     selectedModel,
     setSelectedModel,
+    planMode,
+    setPlanMode,
+    planStatus,
+    planProgress,
     threadId,
     clearMessages,
     showThreadHistory,
@@ -73,14 +77,14 @@ export function ChatSidebar({ className }: { className?: string }) {
   // Show thread history or chat view
   if (showThreadHistory) {
     return (
-      <aside className={cn("flex h-full w-full flex-col bg-[#0a0a0a]", className)}>
+      <aside className={cn("flex h-full w-full flex-col bg-background", className)}>
         <ThreadHistory />
       </aside>
     )
   }
 
   return (
-    <aside data-testid="chat-sidebar" className={cn("flex h-full w-full flex-col bg-[#0a0a0a]", className)}>
+    <aside data-testid="chat-sidebar" className={cn("flex h-full w-full flex-col bg-background", className)}>
       {/* Thread Header */}
       <ThreadHeader threadId={threadId} onNewThread={createNewThread} />
 
@@ -103,7 +107,7 @@ export function ChatSidebar({ className }: { className?: string }) {
 
             {/* Messages - only render container when there are messages */}
             {(messages.length > 0 || status) && (
-              <div className="mx-auto w-full max-w-[610px] px-3">
+              <div className="mx-auto w-full max-w-[670px] px-3">
                 {/* Messages */}
                 {messages.map((message, index) => (
                   <div key={message.id} className="w-full" style={{ opacity: 1, transform: 'none' }}>
@@ -119,7 +123,7 @@ export function ChatSidebar({ className }: { className?: string }) {
                 )}
 
                 {/* Bottom fade gradient */}
-                <div className="from-[#0a0a0a] pointer-events-none sticky bottom-0 z-20 h-2 bg-gradient-to-t to-transparent" />
+                <div className="from-background pointer-events-none sticky bottom-0 z-20 h-2 bg-gradient-to-t to-transparent" />
 
                 <div ref={messagesEndRef} />
               </div>
@@ -130,7 +134,7 @@ export function ChatSidebar({ className }: { className?: string }) {
 
       {/* Input Container */}
       <div className="p-3 pt-0">
-        <div className="mx-auto w-full max-w-[610px]">
+        <div className="mx-auto w-full max-w-[670px]">
           <ChatInput
             value={input}
             onChange={setInput}
@@ -139,6 +143,10 @@ export function ChatSidebar({ className }: { className?: string }) {
             placeholder="Plan, search, build anything..."
             autoApprove={autoApprove}
             onAutoApproveChange={setAutoApprove}
+            planMode={planMode}
+            onPlanModeChange={setPlanMode}
+            planStatus={planStatus}
+            planProgress={planProgress}
             onStop={stopAgent}
             selectedModel={selectedModel}
             onModelChange={setSelectedModel}

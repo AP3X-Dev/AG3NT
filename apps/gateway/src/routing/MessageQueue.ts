@@ -9,6 +9,7 @@ import { randomUUID } from 'crypto';
 import type { ChannelMessage, ChannelResponse } from '../channels/types.js';
 import type { EnhancedSession, SessionQuotas } from '../session/SessionStore.js';
 import type { RoutingDecision } from './AgentRouter.js';
+import type { QueueModeManager } from './QueueModeManager.js';
 
 // ─────────────────────────────────────────────────────────────────
 // Types
@@ -104,8 +105,33 @@ interface SessionWindow {
 
 export class RateLimiter {
   private windows: Map<string, SessionWindow> = new Map();
+  private lastCleanup = 0;
+  private static readonly CLEANUP_INTERVAL_MS = 60_000; // 60 seconds
+
+  /**
+   * Remove stale session windows that have no active concurrent requests
+   * and no timestamps within the last hour. Prevents unbounded Map growth.
+   */
+  private maybeCleanupStaleWindows(): void {
+    const now = Date.now();
+    if (now - this.lastCleanup < RateLimiter.CLEANUP_INTERVAL_MS) return;
+    this.lastCleanup = now;
+
+    const oneHourAgo = now - 3600_000;
+    for (const [sessionId, window] of this.windows) {
+      if (
+        window.concurrent === 0 &&
+        (window.timestamps.length === 0 ||
+          window.timestamps[window.timestamps.length - 1] <= oneHourAgo)
+      ) {
+        this.windows.delete(sessionId);
+      }
+    }
+  }
 
   tryAcquire(sessionId: string, quotas: SessionQuotas): boolean {
+    this.maybeCleanupStaleWindows();
+
     const now = Date.now();
     const oneHourAgo = now - 3600_000;
 
@@ -115,11 +141,26 @@ export class RateLimiter {
       this.windows.set(sessionId, window);
     }
 
-    // Prune old timestamps outside the 1-hour window
-    window.timestamps = window.timestamps.filter((t) => t > oneHourAgo);
+    // Prune old timestamps using binary search (timestamps are chronological)
+    const ts = window.timestamps;
+    if (ts.length > 0 && ts[0] <= oneHourAgo) {
+      let lo = 0;
+      let hi = ts.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (ts[mid] <= oneHourAgo) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      if (lo > 0) {
+        ts.splice(0, lo);
+      }
+    }
 
     // Check turns per hour
-    if (window.timestamps.length >= quotas.maxTurnsPerHour) {
+    if (ts.length >= quotas.maxTurnsPerHour) {
       return false;
     }
 
@@ -129,7 +170,7 @@ export class RateLimiter {
     }
 
     // Acquire
-    window.timestamps.push(now);
+    ts.push(now);
     window.concurrent++;
     return true;
   }
@@ -146,9 +187,20 @@ export class RateLimiter {
     if (!window) return null;
 
     const oneHourAgo = Date.now() - 3600_000;
-    const recent = window.timestamps.filter((t) => t > oneHourAgo);
+    const ts = window.timestamps;
+    // Binary search for cutoff instead of creating a new filtered array
+    let lo = 0;
+    let hi = ts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (ts[mid] <= oneHourAgo) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
     return {
-      turnsInLastHour: recent.length,
+      turnsInLastHour: ts.length - lo,
       concurrent: window.concurrent,
     };
   }
@@ -162,6 +214,8 @@ export interface QueueManagerConfig {
   queueEnabled: boolean;
   queueIntervalMs: number;
   maxQueueSize: number;
+  /** Maximum items processed concurrently (default: 3). */
+  maxConcurrent?: number;
 }
 
 export class QueueManager {
@@ -170,6 +224,8 @@ export class QueueManager {
   private config: QueueManagerConfig;
   private processHandler: ((item: QueueItem) => Promise<ChannelResponse>) | null = null;
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private activeCount = 0;
+  private maxConcurrent: number;
   private stats: QueueStats = {
     size: 0,
     processing: 0,
@@ -177,11 +233,13 @@ export class QueueManager {
     totalProcessed: 0,
     totalRejected: 0,
   };
+  private sessionQueueModes = new Map<string, QueueModeManager>();
 
   constructor(config: QueueManagerConfig) {
     this.config = config;
     this.queue = new MessageQueue();
     this.rateLimiter = new RateLimiter();
+    this.maxConcurrent = config.maxConcurrent ?? 3;
   }
 
   /**
@@ -193,7 +251,8 @@ export class QueueManager {
 
   /**
    * Submit a message for processing.
-   * If queueing is disabled, processes immediately.
+   * If the session has an active QueueModeManager, mid-run messages are
+   * buffered there instead of creating new queue items.
    * Returns a promise that resolves with the response.
    */
   submit(
@@ -201,6 +260,31 @@ export class QueueManager {
     session: EnhancedSession,
     routingDecision: RoutingDecision,
   ): Promise<ChannelResponse> {
+    // Check if session has an active QueueModeManager (mid-run message handling)
+    const modeMgr = this.sessionQueueModes.get(session.id);
+    if (modeMgr) {
+      const accepted = modeMgr.enqueue({
+        text: message.text,
+        sessionId: session.id,
+        channelType: message.channelType,
+        chatId: message.chatId,
+        timestamp: Date.now(),
+        metadata: message.metadata,
+      });
+
+      if (!accepted) {
+        return Promise.resolve({
+          text: 'Message queue is full. Please wait for the current response to complete.',
+          metadata: { queueModeDrop: true, sessionId: session.id },
+        });
+      }
+
+      return Promise.resolve({
+        text: '',
+        metadata: { queued: true, sessionId: session.id, mode: modeMgr.getStats().mode },
+      });
+    }
+
     // Rate limit check
     if (!this.rateLimiter.tryAcquire(session.id, session.quotas)) {
       this.stats.totalRejected++;
@@ -250,6 +334,9 @@ export class QueueManager {
       this.queue.enqueue(item);
       this.stats.totalEnqueued++;
       this.stats.size = this.queue.size();
+
+      // Trigger immediate processing instead of waiting for next interval
+      this.triggerProcess();
     });
   }
 
@@ -271,17 +358,39 @@ export class QueueManager {
   }
 
   /**
+   * Trigger immediate processing of queued items (event-driven).
+   * Allows up to maxConcurrent items to process simultaneously.
+   * Each completed item re-triggers to pick up the next queued item.
+   */
+  private triggerProcess(): void {
+    while (this.activeCount < this.maxConcurrent && this.queue.size() > 0) {
+      this.activeCount++;
+      this.processNext()
+        .catch((err) => {
+          console.error('[QueueManager] Processing error:', err);
+        })
+        .finally(() => {
+          this.activeCount--;
+          // Check if more items arrived during processing
+          if (this.queue.size() > 0) {
+            this.triggerProcess();
+          }
+        });
+    }
+  }
+
+  /**
    * Start the processing loop.
+   * Uses a fallback interval (1000ms) to catch any items missed by event-driven triggers.
    */
   start(intervalMs?: number): void {
     if (this.intervalId) return;
 
-    const interval = intervalMs ?? this.config.queueIntervalMs;
+    // Use a longer fallback interval — primary processing is event-driven via triggerProcess()
+    const interval = intervalMs ?? Math.max(this.config.queueIntervalMs, 1000);
     this.intervalId = setInterval(() => {
       if (this.queue.size() > 0) {
-        this.processNext().catch((err) => {
-          console.error('[QueueManager] Processing error:', err);
-        });
+        this.triggerProcess();
       }
     }, interval);
   }
@@ -307,6 +416,27 @@ export class QueueManager {
     return this.rateLimiter;
   }
 
+  /**
+   * Associate a QueueModeManager with a session for mid-run message handling.
+   */
+  setSessionQueueMode(sessionId: string, modeMgr: QueueModeManager): void {
+    this.sessionQueueModes.set(sessionId, modeMgr);
+  }
+
+  /**
+   * Remove the QueueModeManager associated with a session.
+   */
+  removeSessionQueueMode(sessionId: string): void {
+    this.sessionQueueModes.delete(sessionId);
+  }
+
+  /**
+   * Get queue mode statistics for a session, or null if no QueueModeManager is set.
+   */
+  getSessionQueueModeStats(sessionId: string): ReturnType<QueueModeManager['getStats']> | null {
+    return this.sessionQueueModes.get(sessionId)?.getStats() ?? null;
+  }
+
   private async processItem(item: QueueItem): Promise<ChannelResponse> {
     this.stats.processing++;
 
@@ -317,10 +447,81 @@ export class QueueManager {
 
       const response = await this.processHandler(item);
       this.stats.totalProcessed++;
+
+      // After processing, drain any mid-run messages collected by QueueModeManager
+      const modeMgr = this.sessionQueueModes.get(item.session.id);
+      if (modeMgr && modeMgr.size() > 0 && modeMgr.isReady()) {
+        await this.processCollectedMessages(modeMgr, item);
+      }
+
       return response;
     } finally {
       this.stats.processing--;
       this.rateLimiter.release(item.session.id);
+    }
+  }
+
+  /**
+   * Process messages collected by QueueModeManager after the primary turn completes.
+   * In collect mode, combines all messages into a single prompt.
+   * In follow-up/steer mode, drains individual messages and processes them as new turns.
+   */
+  private async processCollectedMessages(
+    modeMgr: QueueModeManager,
+    originalItem: QueueItem,
+  ): Promise<void> {
+    if (!this.processHandler) return;
+
+    const stats = modeMgr.getStats();
+
+    if (stats.mode === 'collect') {
+      // Combine all collected messages into a single prompt
+      const collected = modeMgr.drainCollected();
+      if (!collected) return;
+
+      const collectItem: QueueItem = {
+        id: randomUUID(),
+        message: { ...originalItem.message, text: collected },
+        session: originalItem.session,
+        priority: originalItem.priority,
+        enqueuedAt: Date.now(),
+        routingDecision: originalItem.routingDecision,
+        resolve: () => {},
+        reject: () => {},
+      };
+
+      try {
+        await this.processHandler(collectItem);
+        this.stats.totalProcessed++;
+      } catch {
+        // Errors in follow-up processing are logged but don't break the primary response
+      }
+    } else {
+      // follow-up and steer: drain individual messages
+      const messages = modeMgr.drain();
+      for (const msg of messages) {
+        const followUpItem: QueueItem = {
+          id: randomUUID(),
+          message: {
+            ...originalItem.message,
+            text: msg.text,
+            metadata: msg.metadata,
+          },
+          session: originalItem.session,
+          priority: originalItem.priority,
+          enqueuedAt: msg.timestamp,
+          routingDecision: originalItem.routingDecision,
+          resolve: () => {},
+          reject: () => {},
+        };
+
+        try {
+          await this.processHandler(followUpItem);
+          this.stats.totalProcessed++;
+        } catch {
+          // Continue processing remaining messages even if one fails
+        }
+      }
     }
   }
 }

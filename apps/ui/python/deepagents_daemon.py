@@ -53,6 +53,7 @@ def create_model(model_name_override: str | None = None):
     - Kimi direct: "kimi-*", "moonshot-*"
     """
     import os
+    logging.info(f"[create_model] model_name_override={model_name_override!r}")
     if model_name_override:
         # Detect provider from model name format
         if "/" in model_name_override:
@@ -71,9 +72,22 @@ def create_model(model_name_override: str | None = None):
         elif model_name_override.startswith(("kimi-", "moonshot-")):
             os.environ["AG3NT_MODEL_PROVIDER"] = "kimi"
             os.environ["AG3NT_MODEL_NAME"] = model_name_override
+        elif model_name_override == "kimi-for-coding":
+            os.environ["AG3NT_MODEL_PROVIDER"] = "kimi"
+            os.environ["AG3NT_MODEL_NAME"] = "kimi-for-coding"
         else:
             # Unknown format, just set the model name and let ag3nt detect
             os.environ["AG3NT_MODEL_NAME"] = model_name_override
+        logging.info(
+            f"[create_model] Set env: AG3NT_MODEL_PROVIDER={os.environ.get('AG3NT_MODEL_PROVIDER')}, "
+            f"AG3NT_MODEL_NAME={os.environ.get('AG3NT_MODEL_NAME')}"
+        )
+    else:
+        logging.warning(
+            "[create_model] No model override provided, using env defaults: "
+            f"AG3NT_MODEL_PROVIDER={os.environ.get('AG3NT_MODEL_PROVIDER', '(unset)')}, "
+            f"AG3NT_MODEL_NAME={os.environ.get('AG3NT_MODEL_NAME', '(unset)')}"
+        )
 
     return _ag3nt_create_model()
 from deepagents_cli.file_ops import FileOpTracker
@@ -105,6 +119,9 @@ def sanitize_error(error: Exception) -> dict[str, Any]:
     ERROR_MESSAGES = {
         "ConnectionRefusedError": "Unable to connect to agent service",
         "ConnectionError": "Connection error occurred",
+        "ConnectionResetError": "Connection was reset, please retry",
+        "APIConnectionError": "Failed to connect to AI provider — retrying may help",
+        "APITimeoutError": "AI provider request timed out — retrying may help",
         "TimeoutError": "Request timed out",
         "asyncio.TimeoutError": "Request timed out",
         "ValueError": "Invalid input provided",
@@ -194,6 +211,7 @@ class AgentRuntime:
         self._agents: dict[str, tuple[Any, Any]] = {}
         self._sessions: dict[str, SessionState] = {}
         self._pending_interrupts: dict[str, dict[str, Any]] = {}
+        self._pending_plan_approvals: dict[str, dict[str, Any]] = {}
         # Track cancelled stream request IDs
         self._cancelled_streams: set[str] = set()
 
@@ -295,13 +313,20 @@ class AgentRuntime:
         # self._agents[cache_key] = (agent, backend)
         return agent, backend
 
-    def _build_config(self, *, thread_id: str, assistant_id: str) -> dict[str, Any]:
+    def _build_config(
+        self,
+        *,
+        thread_id: str,
+        assistant_id: str,
+        plan_mode: bool = False,
+    ) -> dict[str, Any]:
         return {
             "configurable": {"thread_id": thread_id},
             "metadata": {
                 "assistant_id": assistant_id,
                 "agent_name": assistant_id,
                 "updated_at": datetime.now(UTC).isoformat(),
+                "plan_mode": plan_mode,
             },
         }
 
@@ -383,12 +408,17 @@ class AgentRuntime:
         model: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
         ui_context: str | None = None,
+        plan_mode: bool = False,
     ):
         """Streaming version of chat that yields events as they happen."""
         session = self._get_session(thread_id)
         session.auto_approve = auto_approve
         agent, backend = self._get_agent(assistant_id, model_name=model)
-        config = self._build_config(thread_id=thread_id, assistant_id=assistant_id)
+        config = self._build_config(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            plan_mode=plan_mode,
+        )
 
         # Clear any pending interrupts for this thread - new message takes priority
         if thread_id in self._pending_interrupts:
@@ -488,13 +518,23 @@ class AgentRuntime:
 
                         logging.info(f"Saved image attachment to: {temp_path}")
 
-                        # Tell the agent about the image file
+                        # Send image as vision content block so the LLM can see it
+                        b64_str = base64.b64encode(image_data).decode("utf-8")
+                        mime = file_type.split(";")[0]  # e.g. "image/png"
+                        content_blocks.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime};base64,{b64_str}"
+                                },
+                            }
+                        )
+
+                        # Also tell the agent where the file is saved
                         content_blocks.append(
                             {
                                 "type": "text",
-                                "text": f"\n\n[User attached image: {file_name}]\n"
-                                f"Image saved to: {temp_path}\n"
-                                f"You can use edit_image, read_image, or other image tools on this path.\n",
+                                "text": f"\n[User attached image: {file_name} — saved to: {temp_path}]\n",
                             }
                         )
                     else:
@@ -579,6 +619,85 @@ class AgentRuntime:
         ):
             yield event
 
+    async def resume_plan_decision(
+        self,
+        *,
+        thread_id: str,
+        assistant_id: str,
+        decision: str,
+        reason: str = "",
+    ):
+        """Handle user's plan approval or rejection decision.
+
+        Yields SSE events as the agent continues execution after
+        the plan decision.
+        """
+        session = self._get_session(thread_id)
+        agent, backend = self._get_agent(assistant_id)
+
+        pending = self._pending_plan_approvals.pop(thread_id, None)
+        if not pending:
+            yield {"type": "error", "message": "No pending plan approval for this thread"}
+            return
+
+        if decision == "approve":
+            yield {"type": "plan_approved", "plan_path": pending["plan_path"]}
+
+            config = self._build_config(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                plan_mode=True,
+            )
+            stream_input = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Plan approved. Execute the plan step by step. "
+                            "For each step: announce it, execute it, verify it works, "
+                            "then move to the next. Create git checkpoints before each "
+                            "step using the checkpoint tool."
+                        ),
+                    }
+                ],
+            }
+            async for event in self._stream_until_done_or_approval(
+                agent=agent,
+                backend=backend,
+                config=config,
+                session=session,
+                stream_input=stream_input,
+            ):
+                yield event
+        else:
+            yield {
+                "type": "plan_rejected",
+                "plan_path": pending["plan_path"],
+                "reason": reason,
+            }
+
+            config = self._build_config(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                plan_mode=True,
+            )
+            rejection_msg = "Plan rejected."
+            if reason:
+                rejection_msg += f" Reason: {reason}"
+            rejection_msg += " Please revise the plan or ask for clarification."
+
+            stream_input = {
+                "messages": [{"role": "user", "content": rejection_msg}],
+            }
+            async for event in self._stream_until_done_or_approval(
+                agent=agent,
+                backend=backend,
+                config=config,
+                session=session,
+                stream_input=stream_input,
+            ):
+                yield event
+
     async def _stream_until_done_or_approval(
         self,
         *,
@@ -612,7 +731,7 @@ class AgentRuntime:
 
             async for chunk in agent.astream(
                 stream_input,
-                stream_mode=["messages", "updates"],
+                stream_mode=["messages", "updates", "custom"],
                 subgraphs=True,
                 config=config,
                 durability="exit",
@@ -622,6 +741,53 @@ class AgentRuntime:
                 namespace, mode, data = chunk
                 ns_key = tuple(namespace) if namespace else ()
                 is_main = ns_key == ()
+
+                if mode == "custom":
+                    if isinstance(data, dict):
+                        event_type = data.get("type", "")
+
+                        # Forward plan lifecycle events directly to UI
+                        if event_type.startswith("plan_"):
+                            yield {
+                                "type": event_type,
+                                **{k: v for k, v in data.items() if k != "type"},
+                            }
+
+                            # plan_ready_for_approval triggers an approval gate
+                            if event_type == "plan_ready_for_approval":
+                                self._pending_plan_approvals[session.thread_id] = {
+                                    "plan_path": data.get("plan_path", ""),
+                                    "plan_content": data.get("plan_content", ""),
+                                    "summary": data.get("summary", ""),
+                                    "step_count": data.get("step_count", 0),
+                                    "checkpoint_count": data.get("checkpoint_count", 0),
+                                }
+
+                                if not session.auto_approve:
+                                    yield {
+                                        "type": "plan_approval_requested",
+                                        "plan_path": data.get("plan_path", ""),
+                                        "plan_content": data.get("plan_content", ""),
+                                        "summary": data.get("summary", ""),
+                                        "step_count": data.get("step_count", 0),
+                                        "checkpoint_count": data.get("checkpoint_count", 0),
+                                    }
+                                    yield {"type": "done", "plan_approval_required": True}
+                                    return
+
+                            continue
+
+                        # Existing: forward parallel_tasks_progress
+                        if event_type == "parallel_tasks_progress":
+                            yield {
+                                "type": "tool_progress",
+                                "tool_name": "parallel_tasks",
+                                "status": data.get("status", ""),
+                                "message": data.get("message", ""),
+                                "completed": data.get("completed"),
+                                "total": data.get("total"),
+                            }
+                    continue
 
                 if mode == "updates":
                     if not isinstance(data, dict):
@@ -886,7 +1052,7 @@ class AgentRuntime:
 
             async for chunk in agent.astream(
                 stream_input,
-                stream_mode=["messages", "updates"],
+                stream_mode=["messages", "updates", "custom"],
                 subgraphs=True,
                 config=config,
                 durability="exit",
@@ -896,6 +1062,19 @@ class AgentRuntime:
                 namespace, mode, data = chunk
                 ns_key = tuple(namespace) if namespace else ()
                 is_main = ns_key == ()
+
+                if mode == "custom":
+                    # Forward custom progress events (e.g. parallel_tasks)
+                    if isinstance(data, dict) and data.get("type") == "parallel_tasks_progress":
+                        events.append({
+                            "type": "tool_progress",
+                            "tool_name": "parallel_tasks",
+                            "status": data.get("status", ""),
+                            "message": data.get("message", ""),
+                            "completed": data.get("completed"),
+                            "total": data.get("total"),
+                        })
+                    continue
 
                 if mode == "updates":
                     if not isinstance(data, dict):
@@ -1225,8 +1404,10 @@ async def main() -> None:
                     attachments = params.get(
                         "attachments"
                     )  # Optional: file attachments
+                    plan_mode = bool(params.get("plan_mode", False))
                     logging.info(
-                        f"chat_stream: model={model!r}, thread={thread_id}, attachments={len(attachments) if attachments else 0}"
+                        f"chat_stream: model={model!r}, thread={thread_id}, "
+                        f"attachments={len(attachments) if attachments else 0}, plan_mode={plan_mode}"
                     )
                     try:
                         async for event in runtime.chat_stream(
@@ -1236,6 +1417,7 @@ async def main() -> None:
                             auto_approve=auto_approve,
                             model=model,
                             attachments=attachments,
+                            plan_mode=plan_mode,
                         ):
                             # Check if stream was cancelled
                             if runtime.is_stream_cancelled(req_id):

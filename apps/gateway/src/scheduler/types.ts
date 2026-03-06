@@ -12,6 +12,13 @@
 export type SessionMode = "isolated" | "main";
 
 /**
+ * Delivery mode for cron job results.
+ * - "notify": Send notification to channel (default)
+ * - "background": Store result only, no notification
+ */
+export type DeliveryMode = "notify" | "background";
+
+/**
  * Definition for creating a cron job.
  */
 export interface CronJobDefinition {
@@ -27,6 +34,10 @@ export interface CronJobDefinition {
   oneShot?: boolean;
   /** Human-readable name for the job */
   name?: string;
+  /** IANA timezone (e.g., 'America/New_York'). Defaults to system timezone. */
+  timezone?: string;
+  /** Delivery mode: 'notify' (default) sends notification, 'background' stores result only. */
+  deliveryMode?: DeliveryMode;
 }
 
 /**
@@ -41,6 +52,8 @@ export interface CronJob extends CronJobDefinition {
   paused: boolean;
   /** When the job was created */
   createdAt: Date;
+  /** Skip execution until this time (exponential backoff after failures) */
+  backoffUntil?: Date;
 }
 
 /**
@@ -58,6 +71,12 @@ export interface SchedulerConfig {
   heartbeat: HeartbeatConfig;
   /** Initial cron jobs from config */
   cronJobs: CronJobDefinition[];
+  /**
+   * Optional workspace path for HeartbeatRunner.
+   * When provided, the Scheduler delegates heartbeat to HeartbeatRunner
+   * which reads HEARTBEAT.md and supports active-hours filtering.
+   */
+  workspacePath?: string;
 }
 
 /**
@@ -71,11 +90,22 @@ export type ScheduledMessageHandler = (
 ) => Promise<{ text: string; notify: boolean }>;
 
 /**
+ * Metadata attached to a scheduler notification.
+ */
+export interface NotificationMetadata {
+  jobId?: string;
+  jobName?: string;
+  type?: "reminder" | "cron";
+  sessionId?: string;
+}
+
+/**
  * Callback for sending notifications to channels.
  */
 export type ChannelNotifier = (
   channelTarget: string | undefined,
-  message: string
+  message: string,
+  metadata?: NotificationMetadata
 ) => Promise<void>;
 
 /**
@@ -93,4 +123,25 @@ export interface SchedulerEvent {
  * Scheduler event handler.
  */
 export type SchedulerEventHandler = (event: SchedulerEvent) => void;
+
+/**
+ * Record of a single cron job execution.
+ * Canonical type re-exported from CronJobStore.
+ */
+export type { RunRecord as CronJobRunRecord } from './CronJobStore.js';
+
+/**
+ * Configuration for per-session queue modes (mid-run message handling).
+ */
+export interface QueueModeSettings {
+  mode: 'follow-up' | 'collect' | 'steer';
+  cap?: number;        // default: 20
+  debounceMs?: number; // default: 1000
+  dropPolicy?: 'old' | 'new' | 'summarize';
+}
+
+/**
+ * Backoff schedule (ms) for consecutive job failures: 30s, 1m, 5m, 15m, 60m.
+ */
+export const ERROR_BACKOFF_MS = [30_000, 60_000, 300_000, 900_000, 3_600_000];
 

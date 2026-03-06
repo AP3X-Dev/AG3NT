@@ -28,7 +28,7 @@ Usage:
     await event_bus.start()
 """
 
-from .event_bus import EventBus, Event, EventPriority
+from .event_bus import EventBus, Event, EventPriority, get_event_bus
 from .learning_engine import LearningEngine
 from .goal_manager import GoalManager, Goal
 from .decision_engine import DecisionEngine, Decision, DecisionType
@@ -38,6 +38,7 @@ __all__ = [
     "EventBus",
     "Event",
     "EventPriority",
+    "get_event_bus",
     # Learning Engine
     "LearningEngine",
     # Goal Manager

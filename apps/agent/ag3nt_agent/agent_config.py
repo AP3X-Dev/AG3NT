@@ -36,5 +36,11 @@ TRUNCATION_DIR: Path = Path.home() / ".ag3nt" / "tool_output"
 # Gateway authentication
 GATEWAY_TOKEN: str = os.environ.get("AG3NT_GATEWAY_TOKEN", "")
 
+# Agent guard
+MAX_AGENT_STEPS: int = int(os.environ.get("AG3NT_MAX_STEPS", "75"))
+
 # YOLO mode — full autonomous operation, no approval gates
 YOLO_MODE: bool = os.environ.get("AG3NT_YOLO_MODE", "false").lower() == "true"
+
+# Cost guardrails
+MAX_SESSION_COST_USD: float = float(os.environ.get("AG3NT_MAX_SESSION_COST", "5.00"))

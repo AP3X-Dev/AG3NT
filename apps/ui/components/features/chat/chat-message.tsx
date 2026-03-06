@@ -3,14 +3,108 @@
 import { memo, useMemo } from 'react'
 import { Terminal, FileDiff, Image as ImageIcon, ExternalLink, FileText, Paperclip } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { Message, FileAttachment } from '@/types'
+import type { Message, FileAttachment, CLIContent } from '@/types'
 import { FilePreview } from './file-preview'
 import { CommandOutput } from './command-output'
 import { ToolCallDisplay } from './tool-call-display'
+import { ToolCallGroup } from './tool-call-group'
 import { CodeBlock } from './code-block'
+import { PlanApprovalCard } from './plan-approval-card'
+import { PlanStepProgress } from './plan-step-progress'
+import { PlanCheckpointResult } from './plan-checkpoint-result'
+import { PlanExecutionSummary } from './plan-execution-summary'
 import { useChat } from '@/providers/chat-provider'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// ============================================================================
+// Tool Call Grouping Logic
+// ============================================================================
+
+type ContentGroup =
+  | { type: 'single'; item: CLIContent; index: number }
+  | { type: 'collapsed'; items: CLIContent[]; startIndex: number }
+
+function isToolLike(item: CLIContent): boolean {
+  return (
+    item.type === 'tool-call' ||
+    item.type === 'tool-output' ||
+    item.type === 'command-output'
+  )
+}
+
+function isPending(item: CLIContent): boolean {
+  return isToolLike(item) && item.status === 'pending'
+}
+
+function groupConsecutiveToolCalls(
+  contents: CLIContent[],
+  minGroupSize: number = 3
+): ContentGroup[] {
+  const groups: ContentGroup[] = []
+  let runBuffer: { item: CLIContent; index: number }[] = []
+  let toolCountInRun = 0
+
+  function flushRun() {
+    if (runBuffer.length === 0) return
+
+    if (toolCountInRun >= minGroupSize) {
+      // Emit as a collapsed group
+      groups.push({
+        type: 'collapsed',
+        items: runBuffer.map((b) => b.item),
+        startIndex: runBuffer[0].index,
+      })
+    } else {
+      // Emit each item individually
+      for (const entry of runBuffer) {
+        groups.push({ type: 'single', item: entry.item, index: entry.index })
+      }
+    }
+
+    runBuffer = []
+    toolCountInRun = 0
+  }
+
+  for (let i = 0; i < contents.length; i++) {
+    const item = contents[i]
+
+    // Pending tool calls should never be grouped — they're actively running
+    if (isPending(item)) {
+      flushRun()
+      groups.push({ type: 'single', item, index: i })
+      continue
+    }
+
+    if (isToolLike(item)) {
+      // Tool-like item always extends the current run
+      runBuffer.push({ item, index: i })
+      toolCountInRun++
+      continue
+    }
+
+    if (item.type === 'text') {
+      // Text extends the run only if there's already at least one tool in it
+      if (toolCountInRun > 0) {
+        runBuffer.push({ item, index: i })
+        continue
+      }
+      // Otherwise this text is standalone — flush any pending run and emit individually
+      flushRun()
+      groups.push({ type: 'single', item, index: i })
+      continue
+    }
+
+    // Non-tool, non-text items (file-content, file-diff, image, error) break the run
+    flushRun()
+    groups.push({ type: 'single', item, index: i })
+  }
+
+  // Flush any remaining run
+  flushRun()
+
+  return groups
+}
 
 interface ChatMessageProps {
   message: Message
@@ -210,6 +304,12 @@ const ChatMessageComponent = ({ message, className, onOpenFile }: ChatMessagePro
   const hasImage = message.content?.includes('![') && message.content?.includes('](')
   const hasApproval = !!message.approvalRequest
 
+  // Group consecutive tool calls for collapsed rendering
+  const contentGroups = useMemo(() => {
+    if (!message.cliContent) return []
+    return groupConsecutiveToolCalls(message.cliContent, 3)
+  }, [message.cliContent])
+
   // Format timestamp for user messages
   const formatTimestamp = (date: Date) => {
     return date.toLocaleTimeString('en-US', {
@@ -275,14 +375,24 @@ const ChatMessageComponent = ({ message, className, onOpenFile }: ChatMessagePro
         )}
 
         {/* CLI content: render in chronological order (interleaved text + tools) */}
+        {/* Groups of 3+ consecutive tool calls are collapsed into a summary bar */}
         {hasCLIContent && (
           <div>
-            {message.cliContent!.map((content, index) => {
+            {contentGroups.map((group, groupIdx) => {
+              // Collapsed group of tool calls
+              if (group.type === 'collapsed') {
+                return (
+                  <div key={`group-${group.startIndex}`} className={groupIdx > 0 ? 'mt-2' : ''}>
+                    <ToolCallGroup items={group.items} onOpenFile={onOpenFile} />
+                  </div>
+                )
+              }
+
+              // Single item — render exactly as before
+              const content = group.item
+              const index = group.index
               const isToolCall = content.type === 'tool-output' || content.type === 'tool-call'
-              const prevContent = index > 0 ? message.cliContent![index - 1] : null
-              const isPrevToolCall = prevContent && (prevContent.type === 'tool-output' || prevContent.type === 'tool-call')
-              // Add more space between tool calls, especially after expanded ones
-              const spacingClass = isToolCall && isPrevToolCall ? 'mt-2' : index > 0 ? 'mt-3' : ''
+              const spacingClass = groupIdx > 0 ? (isToolCall ? 'mt-2' : 'mt-3') : ''
 
               // Text content - render with markdown (interleaved with tools)
               if (content.type === 'text') {
@@ -440,6 +550,39 @@ const ChatMessageComponent = ({ message, className, onOpenFile }: ChatMessagePro
           </div>
         )}
 
+        {/* Plan execution components */}
+        {message.planApproval && (
+          <PlanApprovalCard
+            planPath={message.planApproval.planPath}
+            planContent={message.planApproval.planContent}
+            summary={message.planApproval.summary}
+            stepCount={message.planApproval.stepCount}
+            checkpointCount={message.planApproval.checkpointCount}
+          />
+        )}
+        {message.planProgress && (
+          <PlanStepProgress
+            currentStep={message.planProgress.currentStep}
+            totalSteps={message.planProgress.totalSteps}
+            description={message.planProgress.description}
+            status={message.planProgress.status}
+          />
+        )}
+        {message.planCheckpoint && (
+          <PlanCheckpointResult
+            stepNumber={message.planCheckpoint.stepNumber}
+            passed={message.planCheckpoint.passed}
+            summary={message.planCheckpoint.summary}
+          />
+        )}
+        {message.planSummary && (
+          <PlanExecutionSummary
+            success={message.planSummary.success}
+            stepsCompleted={message.planSummary.stepsCompleted}
+            totalSteps={message.planSummary.totalSteps}
+          />
+        )}
+
         {/* Approval request (human-in-the-loop) - Augment style inline */}
         {hasApproval && message.approvalRequest && (
           <div className="space-y-0.5">
@@ -525,6 +668,10 @@ export const ChatMessage = memo(ChatMessageComponent, (prevProps, nextProps) => 
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.cliContent === nextProps.message.cliContent &&
-    prevProps.message.approvalRequest === nextProps.message.approvalRequest
+    prevProps.message.approvalRequest === nextProps.message.approvalRequest &&
+    prevProps.message.planApproval === nextProps.message.planApproval &&
+    prevProps.message.planProgress === nextProps.message.planProgress &&
+    prevProps.message.planCheckpoint === nextProps.message.planCheckpoint &&
+    prevProps.message.planSummary === nextProps.message.planSummary
   )
 })

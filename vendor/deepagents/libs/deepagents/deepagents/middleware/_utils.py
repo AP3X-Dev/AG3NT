@@ -16,8 +16,40 @@ def append_to_system_message(
     Returns:
         New SystemMessage with the text appended.
     """
-    new_content: list[str | dict[str, str]] = list(system_message.content_blocks) if system_message else []
-    if new_content:
-        text = f"\n\n{text}"
-    new_content.append({"type": "text", "text": text})
-    return SystemMessage(content=new_content)
+    if system_message is None:
+        return SystemMessage(content=[{"type": "text", "text": text}])
+    # Access content_blocks once and spread — avoids intermediate list() copy
+    blocks = system_message.content_blocks
+    prefix = "\n\n" if blocks else ""
+    return SystemMessage(content=[*blocks, {"type": "text", "text": f"{prefix}{text}"}])
+
+
+def append_cached_text(
+    system_message: SystemMessage | None,
+    text: str,
+    cache: bool = True,
+) -> SystemMessage:
+    """Like append_to_system_message but with optional cache_control.
+
+    Marks the block with cache_control={"type": "ephemeral"} when cache=True.
+    This enables Anthropic prompt caching for stable content (identity, skills).
+
+    Args:
+        system_message: Existing system message or None.
+        text: Text to add to the system message.
+        cache: If True, add cache_control to the block. Defaults to True.
+
+    Returns:
+        New SystemMessage with the text appended.
+    """
+    block: dict = {"type": "text", "text": text}
+    if cache:
+        block["cache_control"] = {"type": "ephemeral"}
+
+    if system_message is None:
+        return SystemMessage(content=[block])
+
+    blocks = system_message.content_blocks
+    prefix = "\n\n" if blocks else ""
+    block["text"] = f"{prefix}{text}" if prefix else text
+    return SystemMessage(content=[*blocks, block])

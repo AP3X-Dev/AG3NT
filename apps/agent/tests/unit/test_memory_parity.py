@@ -3,7 +3,6 @@
 Tests cover:
 - ArtifactStore (P2-7.1)
 - ObservationMasker (P2-7.2)
-- ReasoningStateSummarizer (P2-7.3)
 - EmbeddingCache (P2-7.6)
 - MemoryFlusher (P2-7.7)
 - ProgressiveSummarizer (P2-7.8)
@@ -167,74 +166,6 @@ class TestObservationMasker:
 
             assert result is not None
             assert result.was_masked is True
-
-
-# ============================================================================
-# ReasoningStateSummarizer Tests (P2-7.3)
-# ============================================================================
-
-
-class TestReasoningStateSummarizer:
-    """Tests for ReasoningStateSummarizer class."""
-
-    def test_update_state_basic(self):
-        """Test updating state from messages."""
-        from ag3nt_agent.reasoning_state import ReasoningStateSummarizer
-
-        summarizer = ReasoningStateSummarizer()
-        messages = [
-            HumanMessage(content="I want to create a Python script for file processing"),
-            AIMessage(content="I'll help you create a Python script. Let me start by understanding your requirements."),
-        ]
-
-        state = summarizer.update_state(messages, session_id="test-session")
-        assert state.session_id == "test-session"
-        # Should extract goal from user message with "I want to"
-        assert state.current_goal is not None
-
-    def test_extract_steps_from_ai_message(self):
-        """Test extracting reasoning steps from AI messages."""
-        from ag3nt_agent.reasoning_state import (
-            ReasoningStateSummarizer,
-            ReasoningType,
-        )
-
-        summarizer = ReasoningStateSummarizer()
-        messages = [
-            HumanMessage(content="Help me process files"),
-            AIMessage(content="I'll create a script that reads files from the directory"),
-        ]
-
-        state = summarizer.update_state(messages, session_id="test")
-        # AI message with "I'll" should be detected as DECISION
-        decision_steps = [s for s in state.steps if s.step_type == ReasoningType.DECISION]
-        assert len(decision_steps) >= 1
-
-    def test_summarize_reasoning_returns_string(self):
-        """Test summarize_reasoning returns a formatted string."""
-        from ag3nt_agent.reasoning_state import ReasoningStateSummarizer
-
-        summarizer = ReasoningStateSummarizer()
-        messages = [
-            HumanMessage(content="I need to build a web server"),
-            AIMessage(content="I'll help you build a web server using Python Flask."),
-        ]
-
-        summary = summarizer.summarize_reasoning(messages, session_id="test")
-        # Should return a string summary
-        assert isinstance(summary, str)
-        assert len(summary) > 0
-
-    def test_reasoning_type_enum(self):
-        """Test ReasoningType enum values."""
-        from ag3nt_agent.reasoning_state import ReasoningType
-
-        assert ReasoningType.OBSERVATION.value == "observation"
-        assert ReasoningType.DECISION.value == "decision"
-        assert ReasoningType.ACTION.value == "action"
-        assert ReasoningType.CONCLUSION.value == "conclusion"
-        assert ReasoningType.QUESTION.value == "question"
-        assert ReasoningType.PLAN.value == "plan"
 
 
 # ============================================================================

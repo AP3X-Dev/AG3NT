@@ -54,6 +54,7 @@ class CompactionConfig:
     enable_flush: bool = True
     enable_pruning: bool = True
     enable_progressive: bool = True
+    enable_agentic_flush: bool = True
     preserve_recent: int = 20
 
 
@@ -81,6 +82,7 @@ class CompactionMetrics:
     messages_after: int = 0
     artifacts_created: int = 0
     insights_flushed: int = 0
+    agentic_insights_flushed: int = 0
     chunks_summarized: int = 0
     duration_ms: float = 0.0
     timestamp: datetime = field(default_factory=datetime.now)
@@ -178,6 +180,33 @@ class CompactionMiddleware:
         result = flusher.flush(msg_dicts)
         return result.insights_count if result.flushed else 0
 
+    async def _apply_agentic_flush(
+        self,
+        messages: list[AnyMessage],
+        token_count: int,
+        session_id: str | None = None,
+    ) -> int:
+        """Apply LLM-powered agentic memory flush.
+
+        Uses a cheap model to extract insights from messages about to be
+        compacted away.  Only runs when the token count is at least 80% of
+        the configured threshold (i.e. a "heavy" compaction).
+
+        Returns:
+            Number of insights extracted and persisted.
+        """
+        if token_count < self._config.token_threshold * 0.8:
+            return 0
+
+        try:
+            from ag3nt_agent.agentic_flush import agentic_flush
+
+            count = await agentic_flush(messages, session_id)
+            return count
+        except Exception:
+            logger.debug("Agentic flush unavailable", exc_info=True)
+            return 0
+
     def _apply_pruning(
         self,
         messages: list[AnyMessage],
@@ -207,7 +236,7 @@ class CompactionMiddleware:
         Returns:
             Tuple of (processed_messages, chunks_summarized)
         """
-        from langchain_core.messages import HumanMessage
+        from langchain_core.messages import AIMessage, HumanMessage
 
         from ag3nt_agent.context_summarization import get_progressive_summarizer
 
@@ -236,11 +265,19 @@ class CompactionMiddleware:
         if not result.summarized:
             return messages, 0
 
-        # Create summary message and combine with preserved
+        # Structure as a user→assistant pair so the model treats the summary
+        # as its own prior context rather than user content to echo back.
         merged = summarizer.merge_summaries(result.summaries)
-        summary_msg = HumanMessage(content=f"[Previous conversation summary]\n{merged}")
+        summary_ask = HumanMessage(
+            content="What have we been working on so far?",
+            additional_kwargs={"lc_source": "summarization"},
+        )
+        summary_answer = AIMessage(
+            content=f"Here's a summary of our conversation so far:\n\n{merged}",
+            additional_kwargs={"lc_source": "summarization"},
+        )
 
-        return [summary_msg] + list(to_preserve), result.chunks_processed
+        return [summary_ask, summary_answer] + list(to_preserve), result.chunks_processed
 
     def compact(
         self,
@@ -290,6 +327,27 @@ class CompactionMiddleware:
             metrics.insights_flushed = insights
             logger.debug(f"Flush: {insights} insights flushed")
 
+        # Step 2.5: Agentic flush (LLM-powered, only for heavy compaction)
+        # NOTE: This is an async step.  When compact() is called from a
+        # synchronous context the agentic flush is skipped silently.
+        if self._config.enable_agentic_flush:
+            try:
+                import asyncio
+
+                coro = self._apply_agentic_flush(processed, token_count, session_id)
+                try:
+                    loop = asyncio.get_running_loop()
+                    # We are inside an event loop — schedule and await via Task
+                    task = loop.create_task(coro)
+                    # In a sync method we cannot truly await, so we rely on
+                    # async_compact() for the real path.  Record zero here.
+                    metrics.agentic_insights_flushed = 0
+                except RuntimeError:
+                    # No running loop — safe to use asyncio.run()
+                    metrics.agentic_insights_flushed = asyncio.run(coro)
+            except Exception:
+                logger.debug("Agentic flush step skipped", exc_info=True)
+
         # Step 3: Pruning
         if self._config.enable_pruning:
             processed = self._apply_pruning(processed, token_count)
@@ -300,6 +358,89 @@ class CompactionMiddleware:
             processed, chunks = self._apply_progressive(processed, summarize_fn)
             metrics.chunks_summarized = chunks
             logger.debug(f"Progressive: {chunks} chunks summarized")
+
+        metrics.tokens_after = count_tokens_approximately(processed)
+        metrics.messages_after = len(processed)
+        metrics.duration_ms = (time.time() - start_time) * 1000
+
+        self._metrics_history.append(metrics)
+        self._total_compactions += 1
+
+        logger.info(
+            f"Compaction complete: {metrics.tokens_before} -> {metrics.tokens_after} tokens "
+            f"({metrics.compression_ratio:.1%}), {metrics.duration_ms:.1f}ms"
+        )
+
+        return processed, metrics
+
+    async def async_compact(
+        self,
+        messages: list[AnyMessage],
+        token_count: int | None = None,
+        session_id: str | None = None,
+        summarize_fn: Callable[[list[AnyMessage]], str] | None = None,
+    ) -> tuple[list[AnyMessage], CompactionMetrics]:
+        """Async variant of compact() that properly awaits the agentic flush.
+
+        Prefer this over compact() when called from an async context (e.g.
+        the DeepAgents runtime) so that the LLM-powered agentic flush can
+        run without hacks.
+
+        Args:
+            messages: Messages to compact
+            token_count: Optional pre-computed token count
+            session_id: Optional session ID for artifacts
+            summarize_fn: Optional custom summarization function
+
+        Returns:
+            Tuple of (compacted_messages, metrics)
+        """
+        start_time = time.time()
+
+        if token_count is None:
+            token_count = count_tokens_approximately(messages)
+
+        metrics = CompactionMetrics(
+            tokens_before=token_count,
+            messages_before=len(messages),
+        )
+
+        if not self.should_compact(messages, token_count):
+            metrics.tokens_after = token_count
+            metrics.messages_after = len(messages)
+            return messages, metrics
+
+        metrics.triggered = True
+        processed = messages
+
+        # Step 1: Observation masking
+        if self._config.enable_masking:
+            processed, artifacts = self._apply_masking(processed, session_id)
+            metrics.artifacts_created = artifacts
+
+        # Step 2: Memory flush (regex-based)
+        if self._config.enable_flush:
+            insights = self._apply_flush(processed, token_count)
+            metrics.insights_flushed = insights
+
+        # Step 2.5: Agentic flush (LLM-powered)
+        if self._config.enable_agentic_flush:
+            try:
+                agentic_count = await self._apply_agentic_flush(
+                    processed, token_count, session_id
+                )
+                metrics.agentic_insights_flushed = agentic_count
+            except Exception:
+                logger.debug("Agentic flush step skipped", exc_info=True)
+
+        # Step 3: Pruning
+        if self._config.enable_pruning:
+            processed = self._apply_pruning(processed, token_count)
+
+        # Step 4: Progressive summarization
+        if self._config.enable_progressive:
+            processed, chunks = self._apply_progressive(processed, summarize_fn)
+            metrics.chunks_summarized = chunks
 
         metrics.tokens_after = count_tokens_approximately(processed)
         metrics.messages_after = len(processed)
@@ -335,6 +476,9 @@ class CompactionMiddleware:
             / len(self._metrics_history),
             "total_artifacts": sum(m.artifacts_created for m in self._metrics_history),
             "total_insights": sum(m.insights_flushed for m in self._metrics_history),
+            "total_agentic_insights": sum(
+                m.agentic_insights_flushed for m in self._metrics_history
+            ),
             "total_chunks": sum(m.chunks_summarized for m in self._metrics_history),
             "avg_duration_ms": sum(m.duration_ms for m in self._metrics_history)
             / len(self._metrics_history),

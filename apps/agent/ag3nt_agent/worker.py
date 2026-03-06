@@ -34,6 +34,25 @@ from pydantic import BaseModel
 # WebSocket connection logger
 ws_logger = logging.getLogger("ag3nt.websocket")
 
+
+def _create_tracked_task(coro, *, name: str | None = None) -> asyncio.Task:
+    """Create an asyncio Task with exception logging via done_callback.
+
+    Prevents 'Task exception was never retrieved' warnings by attaching
+    a callback that logs any unhandled exceptions.
+    """
+    task = asyncio.create_task(coro, name=name)
+
+    def _done_cb(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            ws_logger.error("Unhandled exception in background task %s: %s", t.get_name(), exc, exc_info=exc)
+
+    task.add_done_callback(_done_cb)
+    return task
+
 from ag3nt_agent.deepagents_runtime import (
     run_turn as deepagents_run_turn,
     resume_turn as deepagents_resume_turn,
@@ -84,7 +103,7 @@ async def prewarm_agent():
             get_agent()
             logger.info("Agent pre-warm complete")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _prewarm)
 
 
@@ -312,13 +331,23 @@ async def autonomous_status():
 
     try:
         from ag3nt_agent.deepagents_runtime import get_autonomous_runtime
-        runtime = get_autonomous_runtime()
-        status = runtime.get_status()
+        rt = get_autonomous_runtime()
+        if rt is None:
+            return AutonomousStatusResponse(enabled=True, running=False)
+        legacy = rt.get("legacy_runtime")
+        if legacy is not None:
+            status = legacy.get_status()
+            return AutonomousStatusResponse(
+                enabled=True,
+                running=status.get("running", False),
+                event_bus=status.get("event_bus"),
+                goals=status.get("goals"),
+            )
+        # No legacy runtime — report subsystem names
         return AutonomousStatusResponse(
             enabled=True,
-            running=status.get("running", False),
-            event_bus=status.get("event_bus"),
-            goals=status.get("goals"),
+            running=len(rt) > 0,
+            event_bus={"subsystems": list(rt.keys())},
         )
     except Exception as e:
         return AutonomousStatusResponse(
@@ -345,15 +374,21 @@ async def publish_autonomous_event(req: AutonomousEventRequest):
 
     try:
         from ag3nt_agent.deepagents_runtime import get_autonomous_runtime
-        runtime = get_autonomous_runtime()
-
-        if not runtime.is_running:
+        rt = get_autonomous_runtime()
+        if rt is None:
             raise HTTPException(
                 status_code=503,
                 detail="Autonomous system is not running"
             )
 
-        accepted = await runtime.publish_event(
+        legacy = rt.get("legacy_runtime")
+        if legacy is None or not getattr(legacy, "is_running", False):
+            raise HTTPException(
+                status_code=503,
+                detail="Autonomous system is not running"
+            )
+
+        accepted = await legacy.publish_event(
             event_type=req.event_type,
             source=req.source,
             payload=req.payload,
@@ -372,7 +407,7 @@ async def publish_autonomous_event(req: AutonomousEventRequest):
 
 
 @app.post("/turn", response_model=TurnResponse)
-def turn(req: TurnRequest):
+async def turn(req: TurnRequest):
     """Run a turn through the DeepAgents runtime.
 
     If the agent attempts to use a risky tool, the response will include
@@ -380,10 +415,13 @@ def turn(req: TurnRequest):
     The client should display these to the user and call /resume with
     the user's decision.
     """
-    result = deepagents_run_turn(
-        session_id=req.session_id,
-        text=req.text,
-        metadata=req.metadata,
+    result = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: deepagents_run_turn(
+            session_id=req.session_id,
+            text=req.text,
+            metadata=req.metadata,
+        ),
     )
 
     # Build interrupt info if present
@@ -415,7 +453,7 @@ def turn(req: TurnRequest):
 
 
 @app.post("/resume", response_model=ResumeResponse)
-def resume(req: ResumeRequest):
+async def resume(req: ResumeRequest):
     """Resume an interrupted turn after user approval/rejection.
 
     The `decisions` field should contain one decision per pending action,
@@ -424,9 +462,12 @@ def resume(req: ResumeRequest):
     If the resumed execution triggers another risky tool, the response
     will again contain an `interrupt` field.
     """
-    result = deepagents_resume_turn(
-        session_id=req.session_id,
-        decisions=req.decisions,
+    result = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: deepagents_resume_turn(
+            session_id=req.session_id,
+            decisions=req.decisions,
+        ),
     )
 
     # Build interrupt info if present
@@ -493,6 +534,18 @@ _session_websockets: dict[str, WebSocket] = {}
 # Lock for thread-safe access to WebSocket dicts
 _ws_lock = threading.Lock()
 
+# Bounded concurrency for WebSocket task processing
+_WS_MAX_CONCURRENT = int(os.environ.get("AG3NT_WS_MAX_CONCURRENT", "10"))
+_ws_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_ws_semaphore() -> asyncio.Semaphore:
+    """Get or create the WebSocket concurrency semaphore."""
+    global _ws_semaphore
+    if _ws_semaphore is None:
+        _ws_semaphore = asyncio.Semaphore(_WS_MAX_CONCURRENT)
+    return _ws_semaphore
+
 
 def _build_interrupt_info(interrupt_data: dict) -> dict:
     """Build interrupt info dict from raw interrupt data."""
@@ -529,25 +582,49 @@ async def _process_turn_ws(
 
     Runs the turn in a thread pool and streams tool events back in real-time.
     """
-    from ag3nt_agent.streaming import get_stream_manager, ToolEvent
+    from ag3nt_agent.streaming import get_stream_manager, ToolEvent, EventType
 
     start_time = time.time()
     unsubscribe = None
+    _progress_token = None
 
     try:
         # Set up streaming: forward tool events to WebSocket
         stream_manager = get_stream_manager()
 
+        # Set up progress bridge: subagent progress events -> StreamManager
+        from deepagents.middleware.subagents import subagent_progress_callback
+
+        def _on_subagent_progress(data: dict) -> None:
+            """Bridge subagent progress events to StreamManager."""
+            stream_manager.emit(ToolEvent(
+                event_type=EventType.TOOL_PROGRESS,
+                session_id=session_id,
+                tool_name="parallel_tasks",
+                tool_call_id=data.get("task_index", "parallel"),
+                data=data,
+            ))
+
+        _progress_token = subagent_progress_callback.set(_on_subagent_progress)
+
+        # Capture the running loop for thread-safe scheduling from sync callbacks
+        _loop = asyncio.get_running_loop()
+
         def on_tool_event(event: ToolEvent) -> None:
-            """Forward tool events to WebSocket."""
+            """Forward tool events to WebSocket.
+
+            Pre-serializes to JSON in the worker thread to avoid blocking
+            the event loop with serialization work.
+            """
             try:
-                # Use asyncio to send from sync callback
-                asyncio.create_task(
-                    ws.send_json({
-                        "type": "stream",
-                        "request_id": request_id,
-                        "event": event.to_dict(),
-                    })
+                payload = json.dumps({
+                    "type": "stream",
+                    "request_id": request_id,
+                    "event": event.to_dict(),
+                })
+                asyncio.run_coroutine_threadsafe(
+                    ws.send_text(payload),
+                    _loop,
                 )
             except Exception as e:
                 ws_logger.debug(f"Failed to send stream event: {e}")
@@ -559,7 +636,7 @@ async def _process_turn_ws(
             _session_websockets[session_id] = ws
 
         # Run the synchronous turn in a thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: deepagents_run_turn(
@@ -596,13 +673,19 @@ async def _process_turn_ws(
 
     except Exception as e:
         ws_logger.error(f"Turn error for {session_id}: {e}")
-        await ws.send_json({
-            "type": "error",
-            "id": request_id,
-            "error": str(e),
-            "error_type": type(e).__name__,
-        })
+        try:
+            await ws.send_json({
+                "type": "error",
+                "id": request_id,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            })
+        except Exception:
+            ws_logger.debug(f"Failed to send error response to WS for {session_id}")
     finally:
+        # Clean up progress bridge contextvar
+        if _progress_token is not None:
+            subagent_progress_callback.reset(_progress_token)
         # Clean up streaming subscription
         if unsubscribe:
             unsubscribe()
@@ -621,7 +704,7 @@ async def _process_resume_ws(
 
     try:
         # Run the synchronous resume in a thread pool
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: deepagents_resume_turn(
@@ -657,12 +740,15 @@ async def _process_resume_ws(
 
     except Exception as e:
         ws_logger.error(f"Resume error for {session_id}: {e}")
-        await ws.send_json({
-            "type": "error",
-            "id": request_id,
-            "error": str(e),
-            "error_type": type(e).__name__,
-        })
+        try:
+            await ws.send_json({
+                "type": "error",
+                "id": request_id,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            })
+        except Exception:
+            ws_logger.debug(f"Failed to send error response to WS for {session_id}")
 
 
 @app.websocket("/ws")
@@ -733,9 +819,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     continue
 
-                # Fire and forget - process in background
-                asyncio.create_task(
-                    _process_turn_ws(websocket, request_id, session_id, text, metadata)
+                # Fire and forget - process in background with bounded concurrency
+                async def _guarded_turn(ws, rid, sid, txt, meta):
+                    async with _get_ws_semaphore():
+                        await _process_turn_ws(ws, rid, sid, txt, meta)
+
+                _create_tracked_task(
+                    _guarded_turn(websocket, request_id, session_id, text, metadata),
+                    name=f"ws-turn-{session_id[:8]}",
                 )
 
             elif msg_type == "resume":
@@ -751,8 +842,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                     continue
 
-                asyncio.create_task(
-                    _process_resume_ws(websocket, request_id, session_id, decisions)
+                async def _guarded_resume(ws, rid, sid, decs):
+                    async with _get_ws_semaphore():
+                        await _process_resume_ws(ws, rid, sid, decs)
+
+                _create_tracked_task(
+                    _guarded_resume(websocket, request_id, session_id, decisions),
+                    name=f"ws-resume-{session_id[:8]}",
                 )
 
             else:
