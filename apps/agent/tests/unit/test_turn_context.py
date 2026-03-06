@@ -12,6 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Mock the langchain module tree so the middleware can be imported without
 # having langchain installed.
@@ -59,10 +61,17 @@ _da_mw = _ensure_mock_module("deepagents.middleware")
 _da_mw_utils = _ensure_mock_module("deepagents.middleware._utils")
 
 
+def _get_prev_text(system_message):
+    """Extract accumulated text from previous mock appends."""
+    prev = getattr(system_message, "_appended_text", None)
+    return prev if isinstance(prev, str) else ""
+
+
 def _mock_append_to_system_message(system_message, text):
     """Fake append — returns a new mock with the text attached."""
     new_msg = MagicMock()
-    new_msg._appended_text = text
+    prev = _get_prev_text(system_message)
+    new_msg._appended_text = (prev + "\n\n" + text) if prev else text
     new_msg._original = system_message
     return new_msg
 
@@ -70,7 +79,8 @@ def _mock_append_to_system_message(system_message, text):
 def _mock_append_cached_text(system_message, text, cache=True):
     """Fake cached append — returns a new mock with text and cache flag."""
     new_msg = MagicMock()
-    new_msg._appended_text = text
+    prev = _get_prev_text(system_message)
+    new_msg._appended_text = (prev + "\n\n" + text) if prev else text
     new_msg._cached = cache
     new_msg._original = system_message
     return new_msg
@@ -86,6 +96,21 @@ for mod_name, mod_obj in _mock_modules.items():
 # Now we can safely import the module under test
 from ag3nt_agent.turn_context_middleware import TurnContextMiddleware  # noqa: E402
 from ag3nt_agent.identity import IdentityLoader  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _patch_append_fns():
+    """Patch the bound names in turn_context_middleware regardless of import order."""
+    import ag3nt_agent.turn_context_middleware as tcm
+    orig_cached = getattr(tcm, "append_cached_text", None)
+    orig_append = getattr(tcm, "append_to_system_message", None)
+    tcm.append_cached_text = _mock_append_cached_text
+    tcm.append_to_system_message = _mock_append_to_system_message
+    yield
+    if orig_cached is not None:
+        tcm.append_cached_text = orig_cached
+    if orig_append is not None:
+        tcm.append_to_system_message = orig_append
 
 
 # ============================================================================

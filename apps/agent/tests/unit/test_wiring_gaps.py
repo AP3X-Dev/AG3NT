@@ -13,6 +13,8 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Mock the langchain / langgraph / deepagents module tree
 # ---------------------------------------------------------------------------
@@ -61,25 +63,57 @@ if not hasattr(_lc_core_msgs, "HumanMessage"):
 _da = _ensure_mock_module("deepagents")
 _da_mw = _ensure_mock_module("deepagents.middleware")
 _da_mw_utils = _ensure_mock_module("deepagents.middleware._utils")
-if not hasattr(_da_mw_utils, "append_to_system_message"):
+def _get_prev_text(system_message):
+    """Extract accumulated text from previous mock appends."""
+    prev = getattr(system_message, "_appended_text", None)
+    return prev if isinstance(prev, str) else ""
 
-    def _mock_append_to_system_message(system_message, text):
-        """Mock append that tracks text for assertions.
 
-        Compatible with test_prompt_modes.py's _appended_text pattern.
-        """
-        new_msg = MagicMock()
-        new_msg._appended_text = text
-        new_msg._original = system_message
-        # Also make string operations work for our tests
-        new_msg.__contains__ = lambda self, item: item in text
-        new_msg.__str__ = lambda self: text
-        return new_msg
+def _mock_append_to_system_message(system_message, text):
+    """Mock append that tracks text for assertions."""
+    new_msg = MagicMock()
+    prev = _get_prev_text(system_message)
+    combined = (prev + "\n\n" + text) if prev else text
+    new_msg._appended_text = combined
+    new_msg._original = system_message
+    new_msg.__contains__ = lambda self, item: item in combined
+    new_msg.__str__ = lambda self: combined
+    return new_msg
 
-    _da_mw_utils.append_to_system_message = _mock_append_to_system_message
+
+def _mock_append_cached_text(system_message, text, cache=True):
+    """Mock cached append that tracks text for assertions."""
+    new_msg = MagicMock()
+    prev = _get_prev_text(system_message)
+    combined = (prev + "\n\n" + text) if prev else text
+    new_msg._appended_text = combined
+    new_msg._cached = cache
+    new_msg._original = system_message
+    new_msg.__contains__ = lambda self, item: item in combined
+    new_msg.__str__ = lambda self: combined
+    return new_msg
+
+
+_da_mw_utils.append_to_system_message = _mock_append_to_system_message
+_da_mw_utils.append_cached_text = _mock_append_cached_text
 
 from ag3nt_agent.turn_context_middleware import TurnContextMiddleware, PromptMode
 from ag3nt_agent.context_budget import ContextBudgetTracker, BudgetStatus
+
+
+@pytest.fixture(autouse=True)
+def _patch_append_fns():
+    """Patch the bound names in turn_context_middleware regardless of import order."""
+    import ag3nt_agent.turn_context_middleware as tcm
+    orig_cached = getattr(tcm, "append_cached_text", None)
+    orig_append = getattr(tcm, "append_to_system_message", None)
+    tcm.append_cached_text = _mock_append_cached_text
+    tcm.append_to_system_message = _mock_append_to_system_message
+    yield
+    if orig_cached is not None:
+        tcm.append_cached_text = orig_cached
+    if orig_append is not None:
+        tcm.append_to_system_message = orig_append
 
 
 # ============================================================================
