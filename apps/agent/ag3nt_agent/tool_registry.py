@@ -47,6 +47,7 @@ TOOL_REGISTRY: list[tuple[str, str, str]] = [
     ("session_search", "ag3nt_agent.session_search_tool", "get_session_search_tool"),
     ("image_tools", "ag3nt_agent.generate_image_tool", "get_image_tools"),
     ("create_skill", "ag3nt_agent.create_skill_tool", "get_create_skill_tools"),
+    ("context_tools", "ag3nt_agent.context_tools", "get_context_tools"),
 ]
 
 
