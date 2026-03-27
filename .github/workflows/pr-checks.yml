@@ -62,7 +62,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       - name: "📋 Checkout Code"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: "🔍 Filter Changed Paths"
         uses: dorny/paths-filter@v3
@@ -88,7 +88,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: "📋 Checkout Code"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
