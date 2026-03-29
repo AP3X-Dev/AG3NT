@@ -21,7 +21,7 @@
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.6",
     "discord.js": "^14.25.1",
-    "dotenv": "^16.4.5",
+    "dotenv": "^17.3.1",
     "express": "^4.19.2",
     "helmet": "^8.1.0",
     "jiti": "^2.4.2",
