@@ -1,7 +1,7 @@
 # AG3NT Agent Worker dependencies
-fastapi==0.115.0
-uvicorn==0.30.6
-pydantic==2.9.2
+fastapi==0.135.2
+uvicorn==0.42.0
+pydantic==2.12.5
 
 # DeepAgents (vendored)
 -e ../../vendor/deepagents/libs/deepagents
